@@ -166,6 +166,25 @@ class TimeAllocator:
             minutes = int((slot[1] - slot[0]).total_seconds() // 60)
             self._used[day] = max(0, self._used.get(day, 0) - minutes)
 
+    def reserve_exact(self, slot: tuple[datetime, datetime]) -> bool:
+        """Reserve a student-selected slot if it does not overlap existing work.
+
+        Direct calendar edits intentionally take precedence over generated daily
+        limits. They still cannot overlap another study session or a fixed busy
+        block, and the interval must stay within one day.
+        """
+        start, end = slot
+        if start >= end or start.date() != end.date():
+            return False
+        day = start.date()
+        occupied = [*self._reserved.get(day, []), *self._busy_intervals(day)]
+        if any(start < other_end and end > other_start for other_start, other_end in occupied):
+            return False
+        self._reserved.setdefault(day, []).append(slot)
+        minutes = int((end - start).total_seconds() // 60)
+        self._used[day] = self._used.get(day, 0) + minutes
+        return True
+
     def export_state(self) -> dict[str, object]:
         """Return the durable allocator state used by repository backends."""
         return {

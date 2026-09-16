@@ -52,13 +52,21 @@ test('analyzes real input, builds a plan, adapts it, and resets cleanly', async 
   await dialog.getByRole('button', { name: 'Generate study plan' }).click()
   await expect(dialog).toHaveCount(0)
   await expect(page.locator('.sx__event').first()).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Review the plan' })).toBeVisible()
+  await expect(page.locator('.calendar-app')).toBeVisible()
+
+  const calendarResults = await new AxeBuilder({ page })
+    .include('.calendar-app')
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+    .analyze()
+  expect(summarizeViolations(calendarResults.violations)).toEqual([])
 
   await page.locator('.sx__event').first().click()
   await expect(page.locator('.session-detail')).toBeVisible()
-  await page.getByLabel('How much could you recall?').selectOption('poor')
-  await page.getByRole('button', { name: 'Save and update plan' }).click()
+  await page.getByRole('button', { name: 'Completed', exact: true }).click()
+  await page.getByLabel('Bạn nhớ nội dung ở mức nào?').selectOption('poor')
+  await page.getByRole('button', { name: 'Xác nhận hoàn thành' }).click()
 
+  await page.getByRole('button', { name: 'Tiến độ', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Where your week went' })).toBeVisible()
   await expect(page.getByText('Synced from study progress')).toBeVisible()
 
@@ -85,10 +93,17 @@ test('analyzes real input, builds a plan, adapts it, and resets cleanly', async 
   await page.setViewportSize({ width: 1440, height: 1000 })
 
   await page.getByRole('button', { name: 'Return to calendar' }).click()
-  await expect(page.getByRole('heading', { name: 'See the adaptation' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'What changed' })).toBeVisible()
+  await expect(page.locator('.calendar-app')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Start a new plan' }).click()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.locator('.calendar-app')).toBeVisible()
+  const calendarOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  )
+  expect(calendarOverflow).toBe(false)
+  await page.setViewportSize({ width: 1440, height: 1000 })
+
+  await page.getByRole('button', { name: 'Tạo kế hoạch mới' }).click()
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: 'Close plan setup' }).click()
   await expect(dialog).toHaveCount(0)
@@ -101,8 +116,9 @@ test('supports dark mode, phone layout, and keyboard dismissal', async ({ page }
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
 
-  await page.getByRole('button', { name: 'Switch to dark theme' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await page.getByRole('button', { name: 'Switch to light theme' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
 
   await page.locator('.empty-calendar-overlay').getByRole('button', { name: 'Create study plan' }).click()
   const dialog = page.getByRole('dialog', { name: 'Create study plan' })
@@ -166,16 +182,63 @@ test('restores an owned plan after reload and deletes all session data on reques
   await page.reload()
   await expect(page.locator('.sx__event').first()).toBeVisible()
   await expect(page.locator('.sx__event')).toHaveCount(countBeforeReload)
-  await expect(page.getByText('Anonymous user-test session')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Xóa dữ liệu của tôi' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Delete my data' }).click()
-  await page.getByRole('button', { name: 'Confirm delete all' }).click()
+  await page.getByRole('button', { name: 'Xóa dữ liệu của tôi' }).click()
+  await page.getByRole('button', { name: 'Xác nhận xóa dữ liệu' }).click()
   await expect(page.locator('.empty-calendar-overlay')).toBeVisible()
 
   await page.reload()
   await expect(
     page.locator('.empty-calendar-overlay').getByRole('button', { name: 'Create study plan' }),
   ).toBeVisible()
+})
+
+test('creates a pending task, cancels with a reason, reschedules, and updates progress', async ({ page }) => {
+  await page.goto('/')
+  await page.locator('.empty-calendar-overlay').getByRole('button', { name: 'Create study plan' }).click()
+  const setup = page.getByRole('dialog', { name: 'Create study plan' })
+  await fillMinimalPlan(setup)
+  await setup.getByRole('button', { name: 'Generate study plan' }).click()
+  await expect(page.locator('.calendar-app')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Tạo', exact: true }).click()
+  const createDialog = page.getByRole('dialog', { name: 'Thêm vào lịch' })
+  await createDialog.getByLabel('Tên công việc').fill('Demo rehearsal')
+  await createDialog.getByLabel('Lịch / nhóm').fill('Capstone')
+  await createDialog.getByLabel('Bắt đầu').fill('2026-09-17T18:00')
+  await createDialog.getByLabel('Kết thúc').fill('2026-09-17T19:00')
+  await createDialog.getByRole('button', { name: 'Tạo công việc' }).click()
+
+  const manualEvent = page.getByRole('button', { name: /Capstone: Demo rehearsal/ })
+  await expect(manualEvent).toBeVisible()
+  const eventBox = await manualEvent.boundingBox()
+  expect(eventBox).not.toBeNull()
+  await page.mouse.move(eventBox!.x + eventBox!.width / 2, eventBox!.y + 12)
+  await page.mouse.down()
+  await page.mouse.move(eventBox!.x + eventBox!.width / 2, eventBox!.y + 40, { steps: 4 })
+  await page.mouse.up()
+  await expect(manualEvent).toHaveAttribute('aria-label', /18:30.*19:30/)
+
+  const resizeHandle = manualEvent.locator('.resize-handle')
+  const handleBox = await resizeHandle.boundingBox()
+  expect(handleBox).not.toBeNull()
+  await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + 2)
+  await page.mouse.down()
+  await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + 30, { steps: 4 })
+  await page.mouse.up()
+  await expect(manualEvent).toHaveAttribute('aria-label', /18:30.*20:00/)
+
+  await manualEvent.click()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.getByText('Vì sao bạn hủy công việc này?')).toBeVisible()
+  await page.getByRole('button', { name: 'Unexpected work' }).click()
+  await page.getByRole('button', { name: 'Xác nhận & dời lịch' }).click()
+  await expect(page.locator('.session-detail')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Tiến độ', exact: true }).click()
+  await expect(page.getByText('Cancelled & rescheduled')).toBeVisible()
+  await expect(page.getByText(/Unexpected work.*rescheduled automatically/)).toBeVisible()
 })
 
 test('uploads a Markdown file and shows an actionable backend-unavailable error', async ({ page }) => {

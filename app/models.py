@@ -57,6 +57,8 @@ class MissReason(str, Enum):
     rest = "rest"
     mood = "mood"
     emergency = "emergency"
+    work = "work"
+    illness = "illness"
     other = "other"
 
 
@@ -69,6 +71,8 @@ MISS_REASON_LABELS: dict[MissReason, str] = {
     MissReason.rest: "Rest",
     MissReason.mood: "Mood",
     MissReason.emergency: "Emergency",
+    MissReason.work: "Unexpected work",
+    MissReason.illness: "Illness",
     MissReason.other: "Something else",
 }
 
@@ -119,6 +123,7 @@ ACTIVITY_CATEGORY_LABELS: dict[ActivityCategory, str] = {
 class ActivitySource(str, Enum):
     manual = "manual"
     study_session = "study_session"
+    cancelled_session = "cancelled_session"
 
 
 class ActivityLog(BaseModel):

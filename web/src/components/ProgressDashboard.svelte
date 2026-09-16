@@ -51,6 +51,12 @@
   const totalMinutes = $derived(
     dashboard?.totals.reduce((sum, item) => sum + item.minutes, 0) ?? 0,
   )
+  const cancelledActivities = $derived(
+    dashboard?.activities.filter((activity) => activity.source === 'cancelled_session') ?? [],
+  )
+  const cancelledMinutes = $derived(
+    cancelledActivities.reduce((sum, activity) => sum + activity.minutes, 0),
+  )
 
   onMount(() => {
     void loadInitial()
@@ -226,6 +232,14 @@
     </button>
   </div>
 
+  {#if cancelledActivities.length}
+    <section class="cancellation-summary" aria-label="Cancelled and rescheduled work">
+      <div><span>Cancelled & rescheduled</span><strong>{cancelledActivities.length}</strong></div>
+      <div><span>Time affected</span><strong>{formatDuration(cancelledMinutes)}</strong></div>
+      <p>Cancellation reasons are included in the category chart and the activity history below.</p>
+    </section>
+  {/if}
+
   {#if loading && !dashboard}
     <div class="analytics-skeleton" aria-label="Loading progress analytics" aria-busy="true">
       <span></span><span></span><span></span>
@@ -353,7 +367,11 @@
                 <div>
                   <strong>{activity.label}</strong>
                   <span>{formatDay(activity.occurred_on)} · {formatDuration(activity.minutes)}</span>
-                  {#if activity.source === 'study_session'}<small>Synced from study progress</small>{/if}
+                  {#if activity.source === 'study_session'}
+                    <small>Synced from study progress</small>
+                  {:else if activity.source === 'cancelled_session'}
+                    <small>Cancelled · {activity.note || 'Reason recorded'} · rescheduled automatically</small>
+                  {/if}
                 </div>
                 {#if activity.source === 'manual'}
                   <div class="row-actions">
@@ -431,16 +449,50 @@
     background: var(--surface-subtle);
   }
 
+  .cancellation-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(150px, 1fr)) minmax(260px, 2fr);
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-small);
+    background: var(--surface-elevated);
+    box-shadow: inset 3px 0 var(--activity-unexpected);
+  }
+
+  .cancellation-summary div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .cancellation-summary span,
+  .cancellation-summary p {
+    color: var(--ink-soft);
+    font-size: 11px;
+  }
+
+  .cancellation-summary strong {
+    font-size: 18px;
+  }
+
+  .cancellation-summary p {
+    margin: 0;
+    line-height: 1.45;
+  }
+
   .range-control button {
     min-height: 36px;
     border: 0;
     background: transparent;
-    color: var(--ink-soft);
+    color: var(--ink);
     padding: 7px 16px;
   }
 
   .range-control button.active {
-    background: var(--accent);
+    background: var(--accent-strong);
     color: var(--accent-ink);
   }
 

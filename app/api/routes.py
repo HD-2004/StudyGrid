@@ -23,7 +23,9 @@ from ..models import (
     Completion,
     Insights,
     MISS_REASON_LABELS,
+    MissReason,
     PlanRequest,
+    StudySession,
 )
 from ..scheduler import build_plan, record_progress
 from ..security import clear_session_cookie, get_owner_id
@@ -45,6 +47,8 @@ from .schemas import (
     PrivacyResponse,
     ProgressRequest,
     ProgressResponse,
+    SessionCreateRequest,
+    SessionUpdateRequest,
     ReasonOption,
 )
 
@@ -218,6 +222,101 @@ def get_events(
     return [CalendarEvent.from_session(session) for session in record.plan.sessions]
 
 
+@router.post(
+    "/plan/{plan_id}/sessions", response_model=CalendarEvent, status_code=201
+)
+def create_session(
+    plan_id: str,
+    request: SessionCreateRequest,
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> CalendarEvent:
+    """Create a real persisted task from the calendar's Create action."""
+    record = repo.load(plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    slot = (request.start, request.end)
+    if not record.allocator.reserve_exact(slot):
+        raise HTTPException(
+            status_code=409,
+            detail="That time overlaps another session or fixed commitment.",
+        )
+    session = StudySession(
+        subject=request.subject,
+        topic=request.topic,
+        start=request.start,
+        end=request.end,
+        rationale="Created manually by the student",
+    )
+    record.plan.sessions.append(session)
+    record.plan.sessions.sort(key=lambda item: item.start)
+    deadline = request.deadline or (request.start.date() + timedelta(days=30))
+    current_deadline = record.exam_dates.get(request.subject)
+    if current_deadline is None or deadline > current_deadline:
+        record.exam_dates[request.subject] = deadline
+    repo.save(record, owner_id)
+    return CalendarEvent.from_session(session)
+
+
+@router.put("/plan/{plan_id}/sessions/{session_id}", response_model=CalendarEvent)
+def update_session(
+    plan_id: str,
+    session_id: str,
+    request: SessionUpdateRequest,
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> CalendarEvent:
+    """Persist direct calendar edits, including drag and resize operations."""
+    record = repo.load(plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    session = next((item for item in record.plan.sessions if item.id == session_id), None)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found in this plan.")
+    if session.completion is not Completion.planned:
+        raise HTTPException(status_code=409, detail="Only pending sessions can be moved.")
+
+    original = (session.start, session.end)
+    requested = (request.start, request.end)
+    record.allocator.release(original)
+    if not record.allocator.reserve_exact(requested):
+        record.allocator.reserve_exact(original)
+        raise HTTPException(
+            status_code=409,
+            detail="That time overlaps another session or fixed commitment.",
+        )
+
+    session.start = request.start
+    session.end = request.end
+    if request.subject is not None:
+        session.subject = request.subject
+    if request.topic is not None:
+        session.topic = request.topic
+    session.rationale = "Adjusted manually on the calendar"
+    record.plan.sessions.sort(key=lambda item: item.start)
+    repo.save(record, owner_id)
+    return CalendarEvent.from_session(session)
+
+
+@router.delete("/plan/{plan_id}/sessions/{session_id}", status_code=204)
+def delete_session(
+    plan_id: str,
+    session_id: str,
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> None:
+    record = repo.load(plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    session = next((item for item in record.plan.sessions if item.id == session_id), None)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found in this plan.")
+    record.allocator.release((session.start, session.end))
+    record.plan.sessions = [item for item in record.plan.sessions if item.id != session_id]
+    repo.delete_activity(f"study-{plan_id}-{session_id}", owner_id)
+    repo.save(record, owner_id)
+
+
 @router.delete("/plan/{plan_id}", status_code=204)
 def delete_plan(
     plan_id: str,
@@ -281,6 +380,33 @@ def submit_progress(
         )
     else:
         repo.delete_activity(completed_activity_id, owner_id)
+
+    if request.completion is Completion.not_completed and request.miss_reason is not None:
+        category_by_reason = {
+            MissReason.club: ActivityCategory.entertainment,
+            MissReason.social: ActivityCategory.entertainment,
+            MissReason.exercise: ActivityCategory.other,
+            MissReason.rest: ActivityCategory.rest,
+            MissReason.mood: ActivityCategory.rest,
+            MissReason.emergency: ActivityCategory.unexpected,
+            MissReason.work: ActivityCategory.work,
+            MissReason.illness: ActivityCategory.illness,
+            MissReason.other: ActivityCategory.other,
+        }
+        repo.save_activity(
+            ActivityLog(
+                id=f"cancelled-{request.plan_id}-{session.id}-{len(plan.history)}",
+                occurred_on=occurred_on,
+                category=category_by_reason[request.miss_reason],
+                label=f"Cancelled: {activity_label}",
+                minutes=activity_minutes,
+                note=MISS_REASON_LABELS[request.miss_reason],
+                source=ActivitySource.cancelled_session,
+                source_id=session.id,
+                plan_id=request.plan_id,
+            ),
+            owner_id,
+        )
 
     return ProgressResponse(
         sessions=plan.sessions,

@@ -15,7 +15,7 @@ export type ActivityCategory =
   | 'unexpected'
   | 'rest'
   | 'other'
-export type ActivitySource = 'manual' | 'study_session'
+export type ActivitySource = 'manual' | 'study_session' | 'cancelled_session'
 export type MissReason =
   | 'club'
   | 'exercise'
@@ -23,6 +23,8 @@ export type MissReason =
   | 'rest'
   | 'mood'
   | 'emergency'
+  | 'work'
+  | 'illness'
   | 'other'
 
 export interface ReasonOption {
@@ -132,6 +134,21 @@ export interface CalendarEvent {
   recall: Recall | null
   rationale: string
   is_review: boolean
+}
+
+export interface SessionCreateInput {
+  subject: string
+  topic: string
+  start: string
+  end: string
+  deadline?: string | null
+}
+
+export interface SessionUpdateInput {
+  subject?: string
+  topic?: string
+  start: string
+  end: string
 }
 
 export interface PlanChange {

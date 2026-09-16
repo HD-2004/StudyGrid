@@ -49,21 +49,23 @@ server restart.
 
 ## Run locally
 
-Start the API from the repository root:
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
-```
-
-Start the frontend in another terminal:
+Start both the API and frontend from the repository root:
 
 ```powershell
 npm run dev -- --port 5173
 ```
 
-The repository-level npm scripts forward to the frontend package in `web`, so
-run them from the repository root. Running directly inside `web` is also
-supported with `npm run dev -- --port 5173`.
+The command waits for the API health check before starting Vite. To use custom
+ports without editing code:
+
+```powershell
+npm run dev -- --port 5175 --api-port 8001
+```
+
+For separate terminals, start the API with
+`.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload`, then run
+`npm run dev:web -- --port 5173`. The combined root command is recommended
+because it prevents the frontend from starting against an unavailable API.
 
 Open `http://127.0.0.1:5173`. The API runs at `http://127.0.0.1:8000`, and its
 interactive documentation is available at `http://127.0.0.1:8000/docs`.

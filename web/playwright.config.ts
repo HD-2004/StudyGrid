@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
+const externalBaseURL = process.env.STUDYGRID_WEB_URL
+
 export default defineConfig({
   testDir: './tests',
   timeout: 90_000,
@@ -7,12 +9,12 @@ export default defineConfig({
   fullyParallel: false,
   reporter: 'line',
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: externalBaseURL ?? 'http://127.0.0.1:5173',
     viewport: { width: 1440, height: 1000 },
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
-  webServer: [
+  webServer: externalBaseURL ? undefined : [
     {
       command: '.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000',
       cwd: '..',

@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 from ..models import (
     ACTIVITY_CATEGORY_LABELS,
@@ -99,6 +99,49 @@ class ProgressResponse(BaseModel):
     changes: list[PlanChange]
     warnings: list[str] = Field(default_factory=list)
     insights: Insights | None = None
+
+
+class SessionCreateRequest(BaseModel):
+    """A manually-created calendar task owned by one generated plan."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    subject: str = Field(min_length=1, max_length=120)
+    topic: str = Field(min_length=1, max_length=200)
+    start: datetime
+    end: datetime
+    deadline: date | None = None
+
+    @model_validator(mode="after")
+    def _check_interval(self) -> SessionCreateRequest:
+        if self.start >= self.end:
+            raise ValueError("Session start must precede end.")
+        if self.start.date() != self.end.date():
+            raise ValueError("A session must start and end on the same day.")
+        if (self.end - self.start).total_seconds() > 12 * 60 * 60:
+            raise ValueError("A session cannot be longer than 12 hours.")
+        return self
+
+
+class SessionUpdateRequest(BaseModel):
+    """Editable fields exposed by the calendar detail panel and drag handles."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    subject: str | None = Field(default=None, min_length=1, max_length=120)
+    topic: str | None = Field(default=None, min_length=1, max_length=200)
+    start: datetime
+    end: datetime
+
+    @model_validator(mode="after")
+    def _check_interval(self) -> SessionUpdateRequest:
+        if self.start >= self.end:
+            raise ValueError("Session start must precede end.")
+        if self.start.date() != self.end.date():
+            raise ValueError("A session must start and end on the same day.")
+        if (self.end - self.start).total_seconds() > 12 * 60 * 60:
+            raise ValueError("A session cannot be longer than 12 hours.")
+        return self
 
 
 class ReasonOption(BaseModel):

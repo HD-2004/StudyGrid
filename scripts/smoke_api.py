@@ -156,6 +156,62 @@ r = client.get(f"/api/plan/{plan_id}/events")
 assert len(r.json()) == len(body["sessions"]), "change did not persist"
 print("[ok] adaptation persisted")
 
+# Manual calendar CRUD: newly-created tasks persist as pending, time edits are
+# stored, and cancellation captures a reason before moving to a new free slot.
+manual_start = START + timedelta(days=7)
+r = client.post(
+    f"/api/plan/{plan_id}/sessions",
+    json={
+        "subject": "Capstone",
+        "topic": "Demo polish",
+        "start": f"{manual_start.isoformat()}T18:00:00",
+        "end": f"{manual_start.isoformat()}T19:00:00",
+        "deadline": (manual_start + timedelta(days=14)).isoformat(),
+    },
+)
+assert r.status_code == 201, r.text
+manual = r.json()
+assert manual["completion"] == "planned"
+
+moved_day = manual_start + timedelta(days=1)
+r = client.put(
+    f"/api/plan/{plan_id}/sessions/{manual['id']}",
+    json={
+        "subject": "Capstone",
+        "topic": "Demo polish and rehearsal",
+        "start": f"{moved_day.isoformat()}T18:30:00",
+        "end": f"{moved_day.isoformat()}T19:30:00",
+    },
+)
+assert r.status_code == 200, r.text
+edited = r.json()
+assert edited["topic"] == "Demo polish and rehearsal"
+assert edited["start"].endswith("18:30:00")
+
+r = client.post(
+    "/api/progress",
+    json={
+        "plan_id": plan_id,
+        "session_id": manual["id"],
+        "completion": "not_completed",
+        "miss_reason": "work",
+    },
+)
+assert r.status_code == 200, r.text
+cancelled = r.json()
+change = next(change for change in cancelled["changes"] if change["session_id"] == manual["id"])
+assert change["type"] == "moved"
+assert change["moved_from"] != change["moved_to"]
+
+r = client.get(f"/api/activities?days=7&end={date.today().isoformat()}")
+assert r.status_code == 200, r.text
+cancel_logs = [item for item in r.json()["activities"] if item["source"] == "cancelled_session"]
+assert cancel_logs and cancel_logs[0]["category"] == "work"
+print("[ok] calendar CRUD + required cancel reason + automatic reschedule + dashboard sync")
+
+r = client.delete(f"/api/plan/{plan_id}/sessions/{manual['id']}")
+assert r.status_code == 204, r.text
+
 # Reset removes only the requested plan and makes subsequent access fail.
 r = client.delete(f"/api/plan/{plan_id}")
 assert r.status_code == 204, r.text

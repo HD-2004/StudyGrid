@@ -19,6 +19,8 @@ import type {
   ProgressResponse,
   ReasonOption,
   Recall,
+  SessionCreateInput,
+  SessionUpdateInput,
 } from './types'
 
 const BASE = '/api' // proxied to the backend by vite.config.ts
@@ -84,6 +86,33 @@ export function getLatestPlan(): Promise<PlanResponse | null> {
 
 export function getEvents(planId: string): Promise<CalendarEvent[]> {
   return request<CalendarEvent[]>(`/plan/${planId}/events`)
+}
+
+export function createSession(
+  planId: string,
+  input: SessionCreateInput,
+): Promise<CalendarEvent> {
+  return request<CalendarEvent>(`/plan/${planId}/sessions`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateSession(
+  planId: string,
+  sessionId: string,
+  input: SessionUpdateInput,
+): Promise<CalendarEvent> {
+  return request<CalendarEvent>(
+    `/plan/${planId}/sessions/${encodeURIComponent(sessionId)}`,
+    { method: 'PUT', body: JSON.stringify(input) },
+  )
+}
+
+export async function deleteCalendarSession(planId: string, sessionId: string): Promise<void> {
+  await request<void>(`/plan/${planId}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+  })
 }
 
 export async function deletePlan(planId: string): Promise<void> {

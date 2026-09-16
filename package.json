@@ -3,7 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "dev": "npm --prefix web run dev --",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "npm --prefix web run dev --",
     "build": "npm --prefix web run build",
     "check": "npm --prefix web run check",
     "preview": "npm --prefix web run preview --"

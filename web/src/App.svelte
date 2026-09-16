@@ -2,20 +2,22 @@
   import { onMount, tick } from 'svelte'
   import {
     createPlan,
+    createSession,
+    deleteCalendarSession,
     deletePlan,
     deleteSessionData,
     getEvents,
-    getInsights,
     getLatestPlan,
     getMissReasons,
     getPrivacy,
     submitProgress,
+    sendCoachMessage,
+    updateSession,
     ApiError,
   } from './lib/api'
   import type {
     CalendarEvent,
     Completion,
-    Insights as InsightsData,
     MissReason,
     PlanChange,
     PlanRequest,
@@ -23,21 +25,18 @@
     PrivacyResponse,
     ReasonOption,
     Recall,
+    SessionCreateInput,
   } from './lib/types'
   import Calendar from './components/Calendar.svelte'
-  import ChangeLog from './components/ChangeLog.svelte'
-  import Insights from './components/Insights.svelte'
   import IntakeForm from './components/IntakeForm.svelte'
   import ProgressDashboard from './components/ProgressDashboard.svelte'
   import SessionDetail from './components/SessionDetail.svelte'
-  import StudyCoach from './components/StudyCoach.svelte'
 
   type Theme = 'light' | 'dark'
 
   let plan = $state<PlanResponse | null>(null)
   let events = $state<CalendarEvent[]>([])
   let changes = $state<PlanChange[]>([])
-  let insights = $state<InsightsData | null>(null)
   let reasons = $state<ReasonOption[]>([])
   let selectedId = $state<string | null>(null)
   let building = $state(false)
@@ -47,22 +46,28 @@
   let deletingData = $state(false)
   let deleteArmed = $state(false)
   let setupOpen = $state(false)
+  let createOpen = $state(false)
   let progressOpen = $state(false)
   let error = $state<string | null>(null)
-  let theme = $state<Theme>('light')
+  let theme = $state<Theme>('dark')
   let themeReady = $state(false)
   let privacy = $state<PrivacyResponse | null>(null)
   let plannerDialog = $state<HTMLDialogElement | null>(null)
   let setupTrigger = $state<HTMLElement | null>(null)
+  let newSession = $state<SessionCreateInput>({
+    subject: '',
+    topic: '',
+    start: '',
+    end: '',
+    deadline: null,
+  })
 
   onMount(() => {
     const stored = localStorage.getItem('studygrid-theme')
     theme =
       stored === 'light' || stored === 'dark'
         ? stored
-        : window.matchMedia('(prefers-color-scheme: dark)').matches
-          ? 'dark'
-          : 'light'
+        : 'dark'
     themeReady = true
     void restoreLatestPlan()
     getPrivacy()
@@ -93,22 +98,24 @@
 
   const selected = $derived(events.find((event) => event.id === selectedId) ?? null)
 
-  const counts = $derived({
-    learn: events.filter((event) => !event.is_review).length,
-    review: events.filter((event) => event.is_review).length,
-    hours: events.reduce(
-      (total, event) => total + (Date.parse(event.end) - Date.parse(event.start)) / 3.6e6,
-      0,
-    ),
-  })
-
   const guideStep = $derived(!plan ? 0 : progressOpen ? 2 : changes.length ? 3 : selected ? 2 : 1)
   const guideCopy = $derived(
     [
       'Add your subjects, planning date, study windows, and fixed commitments.',
-      'Review the calendar. Select any session to record how it went.',
-      'Log completion and recall so StudyGrid can adapt the remaining sessions.',
-      'Review what moved and use the coach or insights to decide what to do next.',
+      'Follow the scheduled blocks. After a session, select it to record what actually happened.',
+      progressOpen
+        ? 'Compare study time with work, rest, and interruptions. Return to the calendar whenever you are ready.'
+        : 'Mark this session complete, partial, or missed. Add recall so later reviews can adjust.',
+      'Your remaining sessions now reflect that update. Check what moved and why below.',
+    ][guideStep],
+  )
+
+  const guideTitle = $derived(
+    [
+      'Set your availability',
+      'Your study week is ready',
+      progressOpen ? 'See where your time goes' : 'Update this study session',
+      'Your schedule has been adjusted',
     ][guideStep],
   )
 
@@ -127,7 +134,6 @@
     building = true
     error = null
     changes = []
-    insights = null
     selectedId = null
     try {
       const created = await createPlan(request)
@@ -148,13 +154,9 @@
     try {
       const latest = await getLatestPlan()
       if (!latest) return
-      const [restoredEvents, restoredInsights] = await Promise.all([
-        getEvents(latest.plan_id),
-        getInsights(latest.plan_id),
-      ])
+      const restoredEvents = await getEvents(latest.plan_id)
       plan = latest
       events = restoredEvents
-      insights = restoredInsights
     } catch (reason) {
       error = reason instanceof ApiError ? reason.message : 'Could not restore your saved plan.'
     } finally {
@@ -179,11 +181,10 @@
         missReason,
       )
       changes = result.changes
-      insights = result.insights
       plan = { ...plan, sessions: result.sessions, warnings: result.warnings }
       events = await getEvents(plan.plan_id)
       selectedId = null
-      progressOpen = true
+      progressOpen = false
     } catch (reason) {
       error = reason instanceof ApiError ? reason.message : 'Could not save your progress.'
     } finally {
@@ -191,7 +192,7 @@
     }
   }
 
-  async function startOver(event: MouseEvent) {
+  async function startOver(event?: MouseEvent) {
     if (!plan || resetting) return
     resetting = true
     error = null
@@ -200,10 +201,9 @@
       plan = null
       events = []
       changes = []
-      insights = null
       selectedId = null
       progressOpen = false
-      openSetup(event.currentTarget as HTMLElement)
+      openSetup(event?.currentTarget as HTMLElement | undefined)
     } catch (reason) {
       error = reason instanceof ApiError ? reason.message : 'Could not reset this plan.'
     } finally {
@@ -223,7 +223,6 @@
       plan = null
       events = []
       changes = []
-      insights = null
       selectedId = null
       progressOpen = false
       deleteArmed = false
@@ -233,12 +232,88 @@
       deletingData = false
     }
   }
+
+  function toInputDate(value: Date): string {
+    const offset = value.getTimezoneOffset() * 60_000
+    return new Date(value.getTime() - offset).toISOString().slice(0, 16)
+  }
+
+  function openCreateSession(start?: string) {
+    const initial = start ? new Date(start) : new Date()
+    initial.setMinutes(Math.ceil(initial.getMinutes() / 30) * 30, 0, 0)
+    const end = new Date(initial.getTime() + 60 * 60_000)
+    newSession = {
+      subject: plan?.sessions[0]?.subject ?? '',
+      topic: '',
+      start: toInputDate(initial),
+      end: toInputDate(end),
+      deadline: null,
+    }
+    createOpen = true
+  }
+
+  async function saveNewSession() {
+    if (!plan) return
+    updating = true
+    error = null
+    try {
+      const created = await createSession(plan.plan_id, {
+        ...$state.snapshot(newSession),
+        subject: newSession.subject.trim(),
+        topic: newSession.topic.trim(),
+        deadline: newSession.deadline || null,
+      })
+      events = [...events, created].sort((left, right) => Date.parse(left.start) - Date.parse(right.start))
+      createOpen = false
+      selectedId = created.id
+    } catch (reason) {
+      error = reason instanceof ApiError ? reason.message : 'Không thể tạo công việc.'
+    } finally {
+      updating = false
+    }
+  }
+
+  async function moveSession(id: string, start: string, end: string, subject?: string, topic?: string) {
+    if (!plan) return
+    error = null
+    try {
+      const updated = await updateSession(plan.plan_id, id, { start, end, subject, topic })
+      events = events
+        .map((event) => (event.id === id ? updated : event))
+        .sort((left, right) => Date.parse(left.start) - Date.parse(right.start))
+    } catch (reason) {
+      const message = reason instanceof ApiError ? reason.message : 'Không thể lưu thời gian mới.'
+      error = message
+      throw new Error(message)
+    }
+  }
+
+  async function removeSession(id: string) {
+    if (!plan) return
+    updating = true
+    error = null
+    try {
+      await deleteCalendarSession(plan.plan_id, id)
+      events = events.filter((event) => event.id !== id)
+      selectedId = null
+    } catch (reason) {
+      error = reason instanceof ApiError ? reason.message : 'Không thể xóa công việc.'
+    } finally {
+      updating = false
+    }
+  }
+
+  async function askAi(message: string) {
+    if (!plan) throw new Error('Hãy tạo kế hoạch trước khi hỏi AI.')
+    const response = await sendCoachMessage(plan.plan_id, message, selectedId)
+    return { reply: response.reply.content, source: response.source }
+  }
 </script>
 
 <a class="skip-link" href="#main-content">Skip to planner</a>
 
 <div class="app-frame">
-  <header class="topbar">
+  {#if !plan}<header class="topbar">
     <a class="brand" href="#main-content" aria-label="StudyGrid home">
       <span class="brand-mark" aria-hidden="true">SG</span>
       <span>StudyGrid</span>
@@ -264,18 +339,54 @@
         </button>
       {/if}
     </nav>
-  </header>
+  </header>{/if}
 
-  <main id="main-content" class="app-shell" inert={setupOpen}>
+  <main id="main-content" class="app-shell" class:calendar-mode={Boolean(plan)} inert={setupOpen}>
+    {#if plan}
+      {#if error}
+        <div class="calendar-error" role="alert"><span>{error}</span><button type="button" onclick={() => (error = null)}>×</button></div>
+      {/if}
+      {#if progressOpen}
+        <div class="progress-shell"><ProgressDashboard onClose={() => (progressOpen = false)} /></div>
+      {:else}
+        <Calendar
+          {events}
+          {theme}
+          onSelect={(id) => (selectedId = id)}
+          onMove={moveSession}
+          onCreate={openCreateSession}
+          onOpenProgress={() => {
+            progressOpen = true
+            selectedId = null
+          }}
+          onToggleTheme={() => (theme = theme === 'dark' ? 'light' : 'dark')}
+          onAskAi={askAi}
+          onStartNew={() => void startOver()}
+          onDeleteData={() => void eraseSessionData()}
+          deleteConfirm={deleteArmed}
+          {deletingData} />
+        {#if selected}
+          <div class="session-popover">
+            {#key selected.id}
+              <SessionDetail
+                event={selected}
+                busy={updating}
+                {reasons}
+                onSubmit={record}
+                onMove={(start, end, subject, topic) => moveSession(selected.id, start, end, subject, topic)}
+                onDelete={() => removeSession(selected.id)}
+                onClose={() => (selectedId = null)} />
+            {/key}
+          </div>
+        {/if}
+      {/if}
+    {:else}
     <section class="intro" aria-labelledby="page-title">
       <div>
         <p class="product-label">Adaptive study planner</p>
         <h1 id="page-title">Create your study schedule</h1>
       </div>
-      <p>
-        Turn course material, deadlines, and your real availability into a plan that
-        responds to what you remember.
-      </p>
+      <p>Turn course material, deadlines, and your real availability into a plan that responds to what you remember.</p>
     </section>
 
     {#if error}
@@ -289,88 +400,31 @@
       <div class="guide-copy">
         <span class="guide-count">{guideStep + 1} of 4</span>
         <div>
-          <h2 id="guide-title">
-            {['Set up your week', 'Review the plan', 'Log a session', 'See the adaptation'][guideStep]}
-          </h2>
+          <h2 id="guide-title">{guideTitle}</h2>
           <p>{guideCopy}</p>
         </div>
       </div>
       <ol aria-label="Demo progress">
-        {#each ['Setup', 'Plan', 'Progress', 'Adapt'] as label, index (label)}
+        {#each ['Setup', 'Calendar', 'Track', 'Adjust'] as label, index (label)}
           <li class:active={index === guideStep} class:complete={index < guideStep}>
             <span aria-hidden="true">{index + 1}</span>
             <span>{label}</span>
           </li>
         {/each}
       </ol>
-      {#if plan}
-        <button
-          type="button"
-          class="guide-action quiet"
-          aria-pressed={progressOpen}
-          onclick={() => {
-            progressOpen = !progressOpen
-            selectedId = null
-          }}>
-          {progressOpen ? 'Back to planner' : 'Open progress'}
-        </button>
-      {/if}
     </section>
 
-    {#if plan && (plan.warnings.length || plan.unscheduled.length)}
-      <section class="caveats" aria-labelledby="capacity-title">
-        <h2 id="capacity-title">Plan limits</h2>
-        {#each plan.warnings as warning (warning)}
-          <p>{warning}</p>
-        {/each}
-        {#if plan.unscheduled.length}
-          <p>
-            No room before the exam for {plan.unscheduled.join(', ')}. Free up more time or
-            remove a topic.
-          </p>
-        {/if}
-      </section>
-    {/if}
-
-    {#if progressOpen && plan}
-      <ProgressDashboard onClose={() => (progressOpen = false)} />
-    {:else}
     <div class="workspace">
       <section class="calendar-panel" aria-labelledby="calendar-heading" tabindex="-1">
         <header class="calendar-header">
           <div>
-            <h2 id="calendar-heading">Study calendar</h2>
-            <p>{plan?.summary ?? 'Your generated sessions will appear here.'}</p>
+            <h2 id="calendar-heading">Schedule</h2>
+            <p>Your generated sessions will appear here.</p>
           </div>
-          {#if plan}
-            <dl class="summary" aria-label="Plan summary">
-              <div>
-                <dt>First passes</dt>
-                <dd>{counts.learn}</dd>
-              </div>
-              <div>
-                <dt>Reviews</dt>
-                <dd>{counts.review}</dd>
-              </div>
-              <div>
-                <dt>Hours booked</dt>
-                <dd>{counts.hours.toFixed(1)}</dd>
-              </div>
-            </dl>
-          {/if}
         </header>
 
-        {#if plan}
-          <div class="key" aria-label="Calendar legend">
-            <span><i class="swatch learn"></i>New material</span>
-            <span><i class="swatch review"></i>Review</span>
-            <span><i class="swatch flag"></i>Needs another look</span>
-          </div>
-        {/if}
-
         <div class="calendar-frame">
-          <Calendar {events} {theme} onSelect={(id) => (selectedId = id)} />
-          {#if !plan}
+          <div class="calendar calendar-empty-grid" aria-hidden="true"></div>
             <div class="empty-calendar-overlay">
               <div class="empty-calendar-card">
                 <span class="empty-index" aria-hidden="true">01</span>
@@ -389,42 +443,17 @@
                 {/if}
               </div>
             </div>
-          {/if}
         </div>
       </section>
 
       <aside class="rail" aria-label="Plan details and guidance">
-        {#if selected}
-          {#key selected.id}
-            <SessionDetail
-              event={selected}
-              busy={updating}
-              {reasons}
-              onSubmit={record}
-              onClose={() => (selectedId = null)} />
-          {/key}
-        {:else if plan}
-          <section class="rail-empty">
-            <span class="rail-number">{events.length}</span>
-            <h2>Choose a session</h2>
-            <p>Select a calendar event to record completion and recall. StudyGrid will explain every change.</p>
-          </section>
-        {:else}
-          <section class="rail-empty">
-            <span class="rail-number">0</span>
-            <h2>No sessions yet</h2>
-            <p>Create a plan to see the calendar, coach, and time-use insights working together.</p>
-          </section>
-        {/if}
-
-        {#if plan}
-          <StudyCoach planId={plan.plan_id} focusSessionId={selectedId} />
-          <ChangeLog {changes} />
-          <Insights {insights} />
-        {/if}
+        <section class="rail-empty">
+          <span class="rail-number">0</span>
+          <h2>No sessions yet</h2>
+          <p>Create a plan to see the calendar, AI planner, and time-use insights working together.</p>
+        </section>
       </aside>
     </div>
-    {/if}
 
     {#if privacy}
       <footer class="privacy-note" aria-label="User-test data controls">
@@ -448,8 +477,28 @@
         </button>
       </footer>
     {/if}
+    {/if}
   </main>
 </div>
+
+{#if createOpen}
+  <div class="modal-scrim" role="presentation">
+    <div class="event-dialog" role="dialog" aria-modal="true" aria-labelledby="create-event-title">
+      <header><div><p class="product-label">Công việc mới</p><h2 id="create-event-title">Thêm vào lịch</h2></div><button type="button" class="close-button" aria-label="Đóng" onclick={() => (createOpen = false)}>×</button></header>
+      <form onsubmit={(event) => { event.preventDefault(); void saveNewSession() }}>
+        <label for="new-topic">Tên công việc</label>
+        <input id="new-topic" type="text" maxlength="200" required bind:value={newSession.topic} placeholder="Ví dụ: Hoàn thiện bản demo" />
+        <label for="new-subject">Lịch / nhóm</label>
+        <input id="new-subject" type="text" maxlength="120" required bind:value={newSession.subject} placeholder="Ví dụ: Capstone" />
+        <div class="event-time-fields"><div><label for="new-start">Bắt đầu</label><input id="new-start" type="datetime-local" required bind:value={newSession.start} /></div><div><label for="new-end">Kết thúc</label><input id="new-end" type="datetime-local" required bind:value={newSession.end} /></div></div>
+        <label for="new-deadline">Hạn chót để tự động dời lịch (không bắt buộc)</label>
+        <input id="new-deadline" type="date" bind:value={newSession.deadline} />
+        <p>Công việc mới được đặt ở trạng thái <strong>Pending</strong>.</p>
+        <div class="dialog-actions"><button type="button" class="quiet" onclick={() => (createOpen = false)}>Hủy</button><button type="submit" disabled={updating}>{updating ? 'Đang lưu…' : 'Tạo công việc'}</button></div>
+      </form>
+    </div>
+  </div>
+{/if}
 
 {#if setupOpen}
   <dialog
@@ -562,8 +611,7 @@
     text-wrap: pretty;
   }
 
-  .error-banner,
-  .caveats {
+  .error-banner {
     margin-bottom: 18px;
     border-radius: var(--radius-medium);
     background: var(--danger-surface);
@@ -658,24 +706,6 @@
     color: var(--accent-ink);
   }
 
-  .guide-action {
-    min-height: 38px;
-    padding-block: 7px;
-  }
-
-  .caveats {
-    padding: 14px 18px;
-  }
-
-  .caveats h2 {
-    font-size: 14px;
-  }
-
-  .caveats p {
-    margin: 4px 0 0;
-    font-size: 12px;
-  }
-
   .workspace {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(286px, 340px);
@@ -692,7 +722,7 @@
 
   .calendar-panel {
     min-width: 0;
-    padding: 20px;
+    overflow: hidden;
   }
 
   .calendar-panel:focus-visible {
@@ -705,7 +735,7 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 24px;
-    margin-bottom: 15px;
+    padding: 20px 20px 14px;
   }
 
   .calendar-header h2 {
@@ -718,69 +748,10 @@
     font-size: 12px;
   }
 
-  .summary {
-    display: flex;
-    gap: 22px;
-    margin: 0;
-  }
-
-  .summary div {
-    display: flex;
-    flex-direction: column-reverse;
-    align-items: flex-end;
-  }
-
-  .summary dt {
-    color: var(--ink-faint);
-    font-size: 10px;
-  }
-
-  .summary dd {
-    margin: 0;
-    color: var(--ink);
-    font-family: var(--mono);
-    font-size: 18px;
-    font-weight: 650;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .key {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px 16px;
-    margin-bottom: 11px;
-    color: var(--ink-soft);
-    font-size: 11px;
-  }
-
-  .key span {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .swatch {
-    width: 9px;
-    height: 9px;
-    border-radius: 2px;
-  }
-
-  .swatch.learn {
-    background: var(--learn);
-  }
-
-  .swatch.review {
-    background: var(--review);
-  }
-
-  .swatch.flag {
-    background: var(--flag);
-  }
-
   .calendar-frame {
     position: relative;
     min-height: 640px;
+    border-top: 1px solid var(--rule);
   }
 
   .empty-calendar-overlay {
@@ -1002,15 +973,6 @@
       gap: 14px;
     }
 
-    .summary {
-      width: 100%;
-      justify-content: space-between;
-    }
-
-    .summary div {
-      align-items: flex-start;
-    }
-
     .calendar-panel,
     .rail {
       border-radius: var(--radius-medium);
@@ -1023,7 +985,7 @@
     }
 
     .calendar-panel {
-      padding: 14px;
+      padding: 0;
     }
 
     .rail {
@@ -1070,6 +1032,159 @@
 
     .empty-calendar-card {
       padding: 20px;
+    }
+  }
+
+  .app-shell.calendar-mode {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .calendar-error {
+    position: fixed;
+    z-index: 80;
+    left: 50%;
+    top: 74px;
+    width: min(560px, calc(100vw - 28px));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    transform: translateX(-50%);
+    padding: 10px 12px;
+    border: 1px solid var(--danger);
+    border-radius: 8px;
+    background: var(--danger-surface);
+    color: var(--danger-ink);
+    box-shadow: var(--shadow-raised);
+    font-size: 12px;
+  }
+
+  .calendar-error button {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    font-size: 20px;
+  }
+
+  .session-popover {
+    position: fixed;
+    z-index: 45;
+    top: 138px;
+    right: 72px;
+  }
+
+  .progress-shell {
+    min-height: 100dvh;
+    padding: 28px clamp(18px, 4vw, 64px) 64px;
+    background: var(--page);
+  }
+
+  .modal-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+    background: var(--scrim);
+  }
+
+  .event-dialog {
+    width: min(540px, 100%);
+    max-height: calc(100dvh - 36px);
+    overflow: auto;
+    padding: 22px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: var(--shadow-raised);
+  }
+
+  .event-dialog > header,
+  .dialog-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .event-dialog h2 {
+    margin: 0;
+    font-size: 22px;
+  }
+
+  .event-dialog form {
+    margin-top: 18px;
+  }
+
+  .event-dialog label {
+    display: block;
+    margin: 12px 0 5px;
+    color: var(--ink-soft);
+    font-size: 11px;
+    font-weight: 650;
+  }
+
+  .event-dialog input {
+    width: 100%;
+    min-height: 42px;
+    padding: 8px 10px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 7px;
+    background: var(--surface-elevated);
+    color: var(--ink);
+    font: inherit;
+  }
+
+  .event-time-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .event-dialog form > p {
+    margin: 12px 0;
+    color: var(--ink-soft);
+    font-size: 11px;
+  }
+
+  .dialog-actions {
+    justify-content: flex-end;
+    margin-top: 18px;
+  }
+
+  .calendar-empty-grid {
+    min-height: 620px;
+    background-color: var(--surface-elevated);
+    background-image:
+      linear-gradient(to right, var(--rule) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--rule) 1px, transparent 1px);
+    background-size: calc(100% / 7) 100%, 100% 56px;
+  }
+
+  @media (max-width: 760px) {
+    .session-popover {
+      top: auto;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      justify-content: center;
+    }
+
+    .event-time-fields {
+      grid-template-columns: 1fr;
+    }
+
+    .progress-shell {
+      padding: 20px 12px 48px;
     }
   }
 </style>
