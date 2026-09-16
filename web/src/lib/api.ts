@@ -19,6 +19,8 @@ import type {
   ProgressResponse,
   ReasonOption,
   Recall,
+  RescheduleAction,
+  RescheduleResponse,
   SessionCreateInput,
   SessionUpdateInput,
 } from './types'
@@ -142,6 +144,21 @@ export function submitProgress(
       completion,
       recall,
       miss_reason: missReason,
+    }),
+  })
+}
+
+export function rescheduleCancelledSession(
+  planId: string,
+  sourceSessionId: string,
+  action: RescheduleAction,
+): Promise<RescheduleResponse> {
+  return request<RescheduleResponse>('/reschedule', {
+    method: 'POST',
+    body: JSON.stringify({
+      plan_id: planId,
+      source_session_id: sourceSessionId,
+      action,
     }),
   })
 }

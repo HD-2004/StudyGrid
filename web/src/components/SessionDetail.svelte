@@ -123,8 +123,8 @@
           <button type="button" class:selected={missReason === option.value} aria-pressed={missReason === option.value} onclick={() => (missReason = option.value)}>{option.label}</button>
         {/each}
       </div>
-      <div class="reschedule-note"><span aria-hidden="true">↻</span><div><strong>Tự động tìm lịch mới</strong><p>StudyGrid sẽ dời công việc đến slot trống tiếp theo và lưu lý do vào Dashboard.</p></div></div>
-      <button type="button" class="confirm cancel-confirm" disabled={busy || !missReason} onclick={() => onSubmit('not_completed', null, missReason)}>{busy ? 'Đang tìm lịch…' : 'Xác nhận & dời lịch'}</button>
+      <div class="reschedule-note"><span aria-hidden="true">↻</span><div><strong>Xóa khung cũ, sau đó hỏi lại</strong><p>StudyGrid sẽ tìm phương án gần nhất. Không có lịch mới nào được tạo trước khi bạn chọn.</p></div></div>
+      <button type="button" class="confirm cancel-confirm" disabled={busy || !missReason} onclick={() => onSubmit('not_completed', null, missReason)}>{busy ? 'Đang tìm lịch…' : 'Xóa khung & tìm lịch mới'}</button>
     </div>
   {:else}
     <p class="pending-note">Công việc đang chờ thực hiện. Bạn có thể kéo khung trên lịch hoặc sửa thời gian trực tiếp tại đây.</p>

@@ -240,6 +240,10 @@ class StudySession(BaseModel):
     # Which pass over the material: 1 = first study, 2+ = review.
     repetition: int = Field(default=1, ge=1)
     rationale: str = ""
+    # Replacement attempts receive a fresh id. Keeping the source id makes a
+    # cancellation auditable without making the cancelled block reappear on
+    # the active calendar.
+    rescheduled_from_id: str | None = None
 
     @property
     def duration_minutes(self) -> int:
@@ -264,9 +268,9 @@ class PlanRequest(BaseModel):
 
 class StudyPlan(BaseModel):
     sessions: list[StudySession] = Field(default_factory=list)
-    # Append-only record of every logged outcome (8.3). Needed because a missed
-    # session is rewritten in place when it is rescheduled, which would
-    # otherwise erase the fact that it was ever missed.
+    # Append-only record of every logged outcome (8.3). Cancelled occurrences
+    # leave the active calendar, while this history preserves their reason and
+    # original time for analytics.
     history: list[StudySession] = Field(default_factory=list)
     summary: str = ""
     warnings: list[str] = Field(default_factory=list)
@@ -280,6 +284,7 @@ class ChangeType(str, Enum):
     added = "added"
     kept = "kept"  # existing session already matches the adaptive target
     blocked = "blocked"  # wanted to adapt but had no room
+    cancelled = "cancelled"
 
 
 class PlanChange(BaseModel):

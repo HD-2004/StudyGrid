@@ -233,8 +233,8 @@
   </div>
 
   {#if cancelledActivities.length}
-    <section class="cancellation-summary" aria-label="Cancelled and rescheduled work">
-      <div><span>Cancelled & rescheduled</span><strong>{cancelledActivities.length}</strong></div>
+    <section class="cancellation-summary" aria-label="Cancelled work">
+      <div><span>Đã hủy</span><strong>{cancelledActivities.length}</strong></div>
       <div><span>Time affected</span><strong>{formatDuration(cancelledMinutes)}</strong></div>
       <p>Cancellation reasons are included in the category chart and the activity history below.</p>
     </section>
@@ -370,7 +370,7 @@
                   {#if activity.source === 'study_session'}
                     <small>Synced from study progress</small>
                   {:else if activity.source === 'cancelled_session'}
-                    <small>Cancelled · {activity.note || 'Reason recorded'} · rescheduled automatically</small>
+                    <small>Đã hủy · {activity.note || 'Đã ghi nhận lý do'} · lịch thay thế theo lựa chọn của bạn</small>
                   {/if}
                 </div>
                 {#if activity.source === 'manual'}

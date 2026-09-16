@@ -52,6 +52,8 @@ RECALL_GAPS = {Recall.poor: 1, Recall.medium: 3}
 _MAX_DAYS_SCAN = 400  # safety net against pathological availability
 _MAX_SUBJECT_STREAK = 2
 _LONG_BREAK_AFTER_MINUTES = 4 * 60
+RESCHEDULE_WINDOW_DAYS = 7
+RECOVERY_CHUNK_MINUTES = 15
 _T = TypeVar("_T")
 
 
@@ -123,20 +125,40 @@ class TimeAllocator:
         self, minutes: int, earliest: date, deadline: date
     ) -> tuple[datetime, datetime] | None:
         """Reserve the first free slot in [earliest, deadline], or None."""
+        slot = self.find_slot(minutes, earliest, deadline)
+        if slot is not None:
+            day = slot[0].date()
+            self._reserved.setdefault(day, []).append(slot)
+            self._used[day] = self._used.get(day, 0) + minutes
+        return slot
+
+    def find_slot(
+        self,
+        minutes: int,
+        earliest: date,
+        deadline: date,
+        *,
+        daily_extra_minutes: int = 0,
+    ) -> tuple[datetime, datetime] | None:
+        """Return the first viable slot without reserving it.
+
+        ``daily_extra_minutes`` is only used after explicit user approval. A
+        weekday configured with zero minutes remains a non-study day.
+        """
         day = max(earliest, earliest)
         scanned = 0
 
         while day <= deadline and scanned < _MAX_DAYS_SCAN:
             scanned += 1
             budget = self.av.weekday_minutes.get(day.weekday(), 0)
-            if budget == 0 or self._used.get(day, 0) + minutes > budget:
+            used = self._used.get(day, 0)
+            allowed = max(budget, used) + daily_extra_minutes
+            if budget == 0 or used + minutes > allowed:
                 day += timedelta(days=1)
                 continue
 
             slot = self._first_gap(day, minutes)
             if slot is not None:
-                self._reserved.setdefault(day, []).append(slot)
-                self._used[day] = self._used.get(day, 0) + minutes
                 return slot
 
             day += timedelta(days=1)
@@ -156,6 +178,26 @@ class TimeAllocator:
                 return candidate
             cursor += timedelta(minutes=1)
         return None
+
+    def allocate_with_daily_extra(
+        self, minutes: int, earliest: date, deadline: date, daily_extra_minutes: int
+    ) -> tuple[datetime, datetime] | None:
+        """Reserve a slot with a small, user-approved daily cap increase."""
+        slot = self.find_slot(
+            minutes,
+            earliest,
+            deadline,
+            daily_extra_minutes=daily_extra_minutes,
+        )
+        if slot is not None:
+            day = slot[0].date()
+            self._reserved.setdefault(day, []).append(slot)
+            self._used[day] = self._used.get(day, 0) + minutes
+        return slot
+
+    def used_minutes(self, day: date) -> int:
+        """Expose the current daily total for transparent cap calculations."""
+        return self._used.get(day, 0)
 
     def release(self, slot: tuple[datetime, datetime]) -> None:
         """Free a slot so its time can be reused (6.4 adaptive rescheduling)."""
@@ -219,6 +261,141 @@ class TimeAllocator:
             date.fromisoformat(day): int(minutes) for day, minutes in used.items()
         }
         return allocator
+
+
+def reschedule_window(
+    session: StudySession, exam_dates: dict[str, date]
+) -> tuple[date, date] | None:
+    """Return the seven-day recovery window, capped by the subject deadline."""
+    first_day = session.start.date() + timedelta(days=1)
+    seventh_day = session.start.date() + timedelta(days=RESCHEDULE_WINDOW_DAYS)
+    deadline = exam_dates.get(session.subject)
+    last_day = min(seventh_day, deadline - timedelta(days=1)) if deadline else seventh_day
+    return (first_day, last_day) if first_day <= last_day else None
+
+
+def propose_full_reschedule(
+    session: StudySession,
+    allocator: TimeAllocator,
+    exam_dates: dict[str, date],
+) -> tuple[datetime, datetime] | None:
+    """Preview the nearest full-length slot without changing allocator state."""
+    window = reschedule_window(session, exam_dates)
+    if window is None:
+        return None
+    return allocator.find_slot(session.duration_minutes, *window)
+
+
+def propose_split_reschedule(
+    session: StudySession,
+    allocator: TimeAllocator,
+    exam_dates: dict[str, date],
+    *,
+    daily_extra_minutes: int = 0,
+) -> tuple[list[tuple[datetime, datetime]], int, int]:
+    """Preview one 15-minute recovery block per day for up to seven days.
+
+    Returns ``(slots, remaining_minutes, extra_minutes)``. Nothing is committed
+    until every minute fits, which prevents a half-rescheduled task.
+    """
+    window = reschedule_window(session, exam_dates)
+    if window is None:
+        return [], session.duration_minutes, 0
+
+    trial = TimeAllocator.from_state(allocator.av, allocator.export_state())
+    slots: list[tuple[datetime, datetime]] = []
+    remaining = session.duration_minutes
+    extra_minutes = 0
+    days: list[date] = []
+    day = window[0]
+    while day <= window[1]:
+        days.append(day)
+        day += timedelta(days=1)
+
+    # The normal recovery policy is exactly one 15-minute block per day. Once
+    # the student approves a cap increase, additional round-robin passes are
+    # allowed so a larger cancellation can still be recovered fairly.
+    while remaining > 0:
+        placed_this_round = False
+        for day in days:
+            if remaining <= 0:
+                break
+            chunk = min(RECOVERY_CHUNK_MINUTES, remaining)
+            used_before = trial.used_minutes(day)
+            if daily_extra_minutes:
+                slot = trial.allocate_with_daily_extra(
+                    chunk, day, day, daily_extra_minutes
+                )
+            else:
+                slot = trial.allocate(chunk, day, day)
+            if slot is None:
+                continue
+            slots.append(slot)
+            placed_this_round = True
+            if daily_extra_minutes:
+                budget = trial.av.weekday_minutes.get(day.weekday(), 0)
+                previous_overage = max(0, used_before - budget)
+                new_overage = max(0, used_before + chunk - budget)
+                extra_minutes += new_overage - previous_overage
+            remaining -= chunk
+        if not daily_extra_minutes or not placed_this_round:
+            break
+
+    return slots, remaining, extra_minutes
+
+
+def commit_reschedule(
+    plan: StudyPlan,
+    source: StudySession,
+    allocator: TimeAllocator,
+    slots: list[tuple[datetime, datetime]],
+    *,
+    split: bool,
+) -> tuple[list[StudySession], list[PlanChange]]:
+    """Create fresh pending attempts linked to one cancelled calendar block."""
+    reserved: list[tuple[datetime, datetime]] = []
+    for slot in slots:
+        if not allocator.reserve_exact(slot):
+            for committed in reserved:
+                allocator.release(committed)
+            return [], []
+        reserved.append(slot)
+
+    replacements: list[StudySession] = []
+    changes: list[PlanChange] = []
+    for index, (start, end) in enumerate(slots, start=1):
+        replacement = StudySession(
+            subject=source.subject,
+            topic=source.topic,
+            start=start,
+            end=end,
+            repetition=source.repetition,
+            rationale=(
+                f"{RECOVERY_CHUNK_MINUTES}-minute recovery block {index} of {len(slots)}"
+                if split
+                else "Rescheduled after a cancelled session"
+            ),
+            rescheduled_from_id=source.id,
+        )
+        replacements.append(replacement)
+        changes.append(
+            PlanChange(
+                type=ChangeType.added if split else ChangeType.moved,
+                topic=source.topic,
+                session_id=replacement.id,
+                moved_from=source.start,
+                moved_to=start,
+                why=(
+                    "Cancelled work was divided into 15-minute daily blocks."
+                    if split
+                    else "You approved the nearest available slot within seven days."
+                ),
+            )
+        )
+
+    plan.sessions.extend(replacements)
+    plan.sessions.sort(key=lambda item: item.start)
+    return replacements, changes
 
 
 def _sessions_needed(estimated_minutes: int, session_length: int) -> int:
@@ -742,58 +919,29 @@ def record_progress(
     # insight report keeps a complete record (8.3).
     plan.history.append(session.model_copy())
 
+    # A cancelled occurrence must disappear from the active calendar even when
+    # no replacement fits. The API asks the student before creating a fresh
+    # attempt; the cancelled snapshot remains in history for analytics.
+    if completion is Completion.not_completed:
+        allocator.release((session.start, session.end))
+        plan.sessions = [s for s in plan.sessions if s.id != session.id]
+        changes.append(
+            PlanChange(
+                type=ChangeType.cancelled,
+                topic=session.topic,
+                session_id=session.id,
+                moved_from=session.start,
+                why="The cancelled block was removed. A replacement needs your approval.",
+            )
+        )
+        return plan, changes
+
     deadline = exam_dates.get(session.subject)
     if deadline is None:
         plan.warnings.append(f"No exam date known for {session.subject}.")
         return plan, changes
 
     last_day = deadline - timedelta(days=1)
-
-    # Unfinished work gets moved forward so it is not silently lost.
-    if completion is Completion.not_completed:
-        allocator.release((session.start, session.end))
-        slot = allocator.allocate(
-            session.duration_minutes, session.start.date() + timedelta(days=1), last_day
-        )
-        if slot is None:
-            plan.warnings.append(f"No free time to redo {session.topic} before {deadline}.")
-            changes.append(
-                PlanChange(
-                    type=ChangeType.blocked,
-                    topic=session.topic,
-                    session_id=session.id,
-                    why=f"Missed, but no free time before {deadline}.",
-                )
-            )
-            return plan, changes
-
-        original_start = session.start
-        # The replacement is a fresh attempt with no progress data. The miss
-        # itself is preserved in plan.history above.
-        moved = session.model_copy(
-            update={
-                "start": slot[0],
-                "end": slot[1],
-                "completion": Completion.planned,
-                "recall": None,
-                "miss_reason": None,
-                "rationale": "Rescheduled after a missed session",
-            }
-        )
-        plan.sessions = [s for s in plan.sessions if s.id != session.id]
-        plan.sessions.append(moved)
-        plan.sessions.sort(key=lambda s: s.start)
-        changes.append(
-            PlanChange(
-                type=ChangeType.moved,
-                topic=session.topic,
-                session_id=moved.id,
-                moved_from=original_start,
-                moved_to=slot[0],
-                why="Session was missed, so it moved to the next free slot.",
-            )
-        )
-        return plan, changes
 
     if recall is not None:
         change = _adapt_reviews(plan, session, recall, allocator, last_day)

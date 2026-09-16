@@ -10,6 +10,7 @@
     getLatestPlan,
     getMissReasons,
     getPrivacy,
+    rescheduleCancelledSession,
     submitProgress,
     sendCoachMessage,
     updateSession,
@@ -25,6 +26,8 @@
     PrivacyResponse,
     ReasonOption,
     Recall,
+    RescheduleAction,
+    RescheduleProposal,
     SessionCreateInput,
   } from './lib/types'
   import Calendar from './components/Calendar.svelte'
@@ -52,6 +55,7 @@
   let theme = $state<Theme>('dark')
   let themeReady = $state(false)
   let privacy = $state<PrivacyResponse | null>(null)
+  let rescheduleFlow = $state<RescheduleProposal | null>(null)
   let plannerDialog = $state<HTMLDialogElement | null>(null)
   let setupTrigger = $state<HTMLElement | null>(null)
   let newSession = $state<SessionCreateInput>({
@@ -181,8 +185,14 @@
         missReason,
       )
       changes = result.changes
-      plan = { ...plan, sessions: result.sessions, warnings: result.warnings }
+      plan = {
+        ...plan,
+        sessions: result.sessions,
+        warnings: result.warnings,
+        unscheduled: result.unscheduled,
+      }
       events = await getEvents(plan.plan_id)
+      rescheduleFlow = result.reschedule
       selectedId = null
       progressOpen = false
     } catch (reason) {
@@ -190,6 +200,45 @@
     } finally {
       updating = false
     }
+  }
+
+  async function applyReschedule(action: RescheduleAction) {
+    if (!plan || !rescheduleFlow) return
+    updating = true
+    error = null
+    try {
+      const result = await rescheduleCancelledSession(
+        plan.plan_id,
+        rescheduleFlow.source_session_id,
+        action,
+      )
+      plan = {
+        ...plan,
+        sessions: result.sessions,
+        warnings: result.warnings,
+        unscheduled: result.unscheduled,
+      }
+      changes = result.changes
+      events = await getEvents(plan.plan_id)
+      rescheduleFlow =
+        result.reschedule.status === 'scheduled' || result.reschedule.status === 'backlog'
+          ? null
+          : result.reschedule
+    } catch (reason) {
+      error = reason instanceof ApiError ? reason.message : 'Không thể xử lý lịch thay thế.'
+    } finally {
+      updating = false
+    }
+  }
+
+  function formatRescheduleTime(value: string): string {
+    return new Date(value).toLocaleString('vi-VN', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
   }
 
   async function startOver(event?: MouseEvent) {
@@ -203,6 +252,7 @@
       changes = []
       selectedId = null
       progressOpen = false
+      rescheduleFlow = null
       openSetup(event?.currentTarget as HTMLElement | undefined)
     } catch (reason) {
       error = reason instanceof ApiError ? reason.message : 'Could not reset this plan.'
@@ -225,6 +275,7 @@
       changes = []
       selectedId = null
       progressOpen = false
+      rescheduleFlow = null
       deleteArmed = false
     } catch (reason) {
       error = reason instanceof ApiError ? reason.message : 'Could not delete your session data.'
@@ -341,7 +392,7 @@
     </nav>
   </header>{/if}
 
-  <main id="main-content" class="app-shell" class:calendar-mode={Boolean(plan)} inert={setupOpen}>
+  <main id="main-content" class="app-shell" class:calendar-mode={Boolean(plan)} inert={setupOpen || Boolean(rescheduleFlow)}>
     {#if plan}
       {#if error}
         <div class="calendar-error" role="alert"><span>{error}</span><button type="button" onclick={() => (error = null)}>×</button></div>
@@ -351,6 +402,7 @@
       {:else}
         <Calendar
           {events}
+          unscheduled={plan.unscheduled}
           {theme}
           onSelect={(id) => (selectedId = id)}
           onMove={moveSession}
@@ -480,6 +532,51 @@
     {/if}
   </main>
 </div>
+
+{#if rescheduleFlow}
+  <div class="modal-scrim" role="presentation">
+    <div class="event-dialog reschedule-dialog" role="dialog" aria-modal="true" aria-labelledby="reschedule-title">
+      <header>
+        <div>
+          <p class="product-label">Khung cũ đã được xóa</p>
+          <h2 id="reschedule-title">Xử lý “{rescheduleFlow.topic}”</h2>
+        </div>
+      </header>
+
+      {#if rescheduleFlow.status === 'full_slot' && rescheduleFlow.slots[0]}
+        <p>StudyGrid đã tìm khung gần nhất trong {rescheduleFlow.search_days} ngày tới:</p>
+        <div class="proposal-time">
+          <strong>{formatRescheduleTime(rescheduleFlow.slots[0].start)}</strong>
+          <span>đến {formatRescheduleTime(rescheduleFlow.slots[0].end)}</span>
+        </div>
+        <p>Bạn có muốn dời toàn bộ {rescheduleFlow.duration_minutes} phút sang khung này không?</p>
+        <div class="dialog-actions split-actions">
+          <button type="button" class="quiet" disabled={updating} onclick={() => void applyReschedule('split')}>Không — chia {rescheduleFlow.chunk_minutes} phút/ngày</button>
+          <button type="button" disabled={updating} onclick={() => void applyReschedule('accept_full')}>{updating ? 'Đang xếp lịch…' : 'Có, dời lịch'}</button>
+        </div>
+      {:else if rescheduleFlow.status === 'needs_limit_approval'}
+        <p>Chia {rescheduleFlow.chunk_minutes} phút mỗi ngày vẫn vượt giới hạn hiện tại. Để hoàn thành công việc, lịch cần cộng thêm <strong>{rescheduleFlow.extra_minutes} phút</strong> ngoài giới hạn trong {rescheduleFlow.search_days} ngày tới.</p>
+        <ul class="proposal-list" aria-label="Các khung học bù đề xuất">
+          {#each rescheduleFlow.slots as slot (slot.start)}
+            <li>{formatRescheduleTime(slot.start)}</li>
+          {/each}
+        </ul>
+        <p class="limit-warning">StudyGrid chỉ tạo các khung vượt giới hạn sau khi bạn đồng ý.</p>
+        <div class="dialog-actions split-actions">
+          <button type="button" class="quiet" disabled={updating} onclick={() => void applyReschedule('backlog')}>Không — để Chưa xếp lịch</button>
+          <button type="button" disabled={updating} onclick={() => void applyReschedule('approve_limit')}>{updating ? 'Đang xếp lịch…' : 'Có, cho phép vượt giới hạn'}</button>
+        </div>
+      {:else}
+        <p>Không có một khung liên tục đủ dài trong {rescheduleFlow.search_days} ngày tới. Bạn có thể chia công việc thành các lượt {rescheduleFlow.chunk_minutes} phút mỗi ngày.</p>
+        <p>Nếu các lượt này cần vượt giới hạn ngày, StudyGrid sẽ hỏi lại trước khi tạo.</p>
+        <div class="dialog-actions split-actions">
+          <button type="button" class="quiet" disabled={updating} onclick={() => void applyReschedule('backlog')}>Đưa vào Chưa xếp lịch</button>
+          <button type="button" disabled={updating} onclick={() => void applyReschedule('split')}>{updating ? 'Đang kiểm tra…' : `Chia ${rescheduleFlow.chunk_minutes} phút/ngày`}</button>
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}
 
 {#if createOpen}
   <div class="modal-scrim" role="presentation">
@@ -1120,6 +1217,53 @@
     font-size: 22px;
   }
 
+  .reschedule-dialog > p {
+    margin: 16px 0 0;
+    color: var(--ink-soft);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .proposal-time {
+    display: grid;
+    gap: 3px;
+    margin-top: 12px;
+    padding: 13px 14px;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  }
+
+  .proposal-time strong {
+    color: var(--ink);
+    font-size: 14px;
+  }
+
+  .proposal-time span,
+  .proposal-list {
+    color: var(--ink-soft);
+    font-size: 11px;
+  }
+
+  .proposal-list {
+    max-height: 170px;
+    overflow: auto;
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--rule);
+  }
+
+  .proposal-list li {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--rule);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .reschedule-dialog .limit-warning {
+    color: var(--danger-ink);
+  }
+
   .event-dialog form {
     margin-top: 18px;
   }
@@ -1160,6 +1304,10 @@
     margin-top: 18px;
   }
 
+  .split-actions button {
+    min-height: 42px;
+  }
+
   .calendar-empty-grid {
     min-height: 620px;
     background-color: var(--surface-elevated);
@@ -1181,6 +1329,11 @@
 
     .event-time-fields {
       grid-template-columns: 1fr;
+    }
+
+    .split-actions {
+      align-items: stretch;
+      flex-direction: column-reverse;
     }
 
     .progress-shell {

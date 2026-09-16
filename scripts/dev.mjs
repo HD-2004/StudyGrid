@@ -57,6 +57,10 @@ if (!rawArgs.some((argument) => argument === '--port' || argument.startsWith('--
 if (!rawArgs.some((argument) => argument === '--host' || argument.startsWith('--host='))) {
   frontendArgs.push('--host', frontendHost)
 }
+if (!rawArgs.includes('--strictPort')) frontendArgs.push('--strictPort')
+
+const displayHost = frontendHost === '0.0.0.0' || frontendHost === '::' ? 'localhost' : frontendHost
+const frontendTarget = `http://${displayHost}:${frontendPort}`
 
 const python = process.platform === 'win32'
   ? join(root, '.venv', 'Scripts', 'python.exe')
@@ -115,6 +119,31 @@ async function waitForApi() {
   throw new Error(`The StudyGrid API did not become ready at ${apiTarget}/health.`)
 }
 
+async function inspectFrontend() {
+  let response
+  try {
+    response = await fetch(frontendTarget, {
+      signal: AbortSignal.timeout(1_000),
+    })
+  } catch {
+    return 'offline'
+  }
+
+  const html = await response.text()
+  if (!response.ok || !html.includes('<title>StudyGrid')) return 'other'
+
+  // A stale Vite process can still serve HTML while its API proxy is dead.
+  // Only reuse it after a proxied request succeeds against a live backend.
+  try {
+    const apiResponse = await fetch(`${frontendTarget}/api/privacy`, {
+      signal: AbortSignal.timeout(1_500),
+    })
+    return apiResponse.ok ? 'studygrid' : 'studygrid-without-api'
+  } catch {
+    return 'studygrid-without-api'
+  }
+}
+
 process.on('SIGINT', () => stop(0))
 process.on('SIGTERM', () => stop(0))
 
@@ -135,22 +164,37 @@ try {
     await waitForApi()
   }
 
-  const displayHost = frontendHost === '0.0.0.0' || frontendHost === '::' ? 'localhost' : frontendHost
-  console.log(`[StudyGrid] Starting web app at http://${displayHost}:${frontendPort}`)
-  const npmCli = process.env.npm_execpath
-  const npmCommand = npmCli && existsSync(npmCli) ? process.execPath : 'npm'
-  const npmArgs = npmCli && existsSync(npmCli)
-    ? [npmCli, '--prefix', 'web', 'run', 'dev', '--', ...frontendArgs]
-    : ['--prefix', 'web', 'run', 'dev', '--', ...frontendArgs]
-  webProcess = spawn(npmCommand, npmArgs, {
-    cwd: root,
-    env: { ...process.env, STUDYGRID_API_TARGET: apiTarget },
-    stdio: 'inherit',
-  })
-  webProcess.once('error', (error) => {
-    console.error(`[StudyGrid] Could not start frontend: ${error.message}`)
-    stop(1)
-  })
+  const frontendState = await inspectFrontend()
+  if (frontendState === 'studygrid') {
+    console.log(`[StudyGrid] Reusing web app at ${frontendTarget}`)
+    console.log(`[StudyGrid] Ready: ${frontendTarget}`)
+  } else {
+    if (frontendState !== 'offline') {
+      throw new Error(
+        `Port ${frontendPort} is already serving ${
+          frontendState === 'studygrid-without-api'
+            ? 'a StudyGrid frontend with a broken API proxy'
+            : 'another application'
+        }. Stop that process or choose another --port.`,
+      )
+    }
+
+    console.log(`[StudyGrid] Starting web app at ${frontendTarget}`)
+    const npmCli = process.env.npm_execpath
+    const npmCommand = npmCli && existsSync(npmCli) ? process.execPath : 'npm'
+    const npmArgs = npmCli && existsSync(npmCli)
+      ? [npmCli, '--prefix', 'web', 'run', 'dev:vite', '--', ...frontendArgs]
+      : ['--prefix', 'web', 'run', 'dev:vite', '--', ...frontendArgs]
+    webProcess = spawn(npmCommand, npmArgs, {
+      cwd: root,
+      env: { ...process.env, STUDYGRID_API_TARGET: apiTarget },
+      stdio: 'inherit',
+    })
+    webProcess.once('error', (error) => {
+      console.error(`[StudyGrid] Could not start frontend: ${error.message}`)
+      stop(1)
+    })
+  }
 
   apiProcess?.once('exit', (code) => {
     if (!stopping) {
@@ -158,7 +202,7 @@ try {
       stop(code ?? 1)
     }
   })
-  webProcess.once('exit', (code) => {
+  webProcess?.once('exit', (code) => {
     if (!stopping) {
       console.error(`[StudyGrid] Frontend stopped with exit code ${code}.`)
       stop(code ?? 0)

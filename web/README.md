@@ -7,8 +7,12 @@ npm install
 npm run dev
 ```
 
-During development, Vite proxies `/api` requests to
-`http://127.0.0.1:8000`.
+`npm run dev` starts both FastAPI and Vite, waits for the API health check, and
+then opens the frontend on `http://127.0.0.1:5173`. Vite proxies `/api`
+requests to `http://127.0.0.1:8000`.
+
+Use `npm run dev:vite` only when the API is already running in another
+terminal.
 
 Verification commands:
 

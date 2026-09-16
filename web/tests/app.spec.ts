@@ -233,12 +233,16 @@ test('creates a pending task, cancels with a reason, reschedules, and updates pr
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(page.getByText('Vì sao bạn hủy công việc này?')).toBeVisible()
   await page.getByRole('button', { name: 'Unexpected work' }).click()
-  await page.getByRole('button', { name: 'Xác nhận & dời lịch' }).click()
+  await page.getByRole('button', { name: 'Xóa khung & tìm lịch mới' }).click()
   await expect(page.locator('.session-detail')).toHaveCount(0)
+  const rescheduleDialog = page.getByRole('dialog', { name: /Xử lý “Demo rehearsal”/ })
+  await expect(rescheduleDialog.getByText('Khung cũ đã được xóa')).toBeVisible()
+  await rescheduleDialog.getByRole('button', { name: 'Có, dời lịch' }).click()
+  await expect(rescheduleDialog).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Tiến độ', exact: true }).click()
-  await expect(page.getByText('Cancelled & rescheduled')).toBeVisible()
-  await expect(page.getByText(/Unexpected work.*rescheduled automatically/)).toBeVisible()
+  await expect(page.getByText('Đã hủy', { exact: true })).toBeVisible()
+  await expect(page.getByText(/Unexpected work.*lịch thay thế theo lựa chọn của bạn/)).toBeVisible()
 })
 
 test('uploads a Markdown file and shows an actionable backend-unavailable error', async ({ page }) => {

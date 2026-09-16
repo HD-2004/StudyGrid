@@ -64,6 +64,7 @@ class CalendarEvent(BaseModel):
     recall: Recall | None
     rationale: str
     is_review: bool
+    rescheduled_from_id: str | None = None
 
     @classmethod
     def from_session(cls, s: StudySession) -> CalendarEvent:
@@ -82,7 +83,32 @@ class CalendarEvent(BaseModel):
             recall=s.recall,
             rationale=s.rationale,
             is_review=s.repetition > 1,
+            rescheduled_from_id=s.rescheduled_from_id,
         )
+
+
+class RescheduleSlot(BaseModel):
+    start: datetime
+    end: datetime
+
+
+class RescheduleProposal(BaseModel):
+    source_session_id: str
+    subject: str
+    topic: str
+    duration_minutes: int
+    status: Literal[
+        "full_slot",
+        "no_full_slot",
+        "needs_limit_approval",
+        "scheduled",
+        "backlog",
+    ]
+    slots: list[RescheduleSlot] = Field(default_factory=list)
+    extra_minutes: int = 0
+    search_through: date
+    search_days: int = Field(ge=1)
+    chunk_minutes: int = Field(ge=1)
 
 
 class ProgressRequest(BaseModel):
@@ -98,7 +124,23 @@ class ProgressResponse(BaseModel):
     sessions: list[StudySession]
     changes: list[PlanChange]
     warnings: list[str] = Field(default_factory=list)
+    unscheduled: list[str] = Field(default_factory=list)
     insights: Insights | None = None
+    reschedule: RescheduleProposal | None = None
+
+
+class RescheduleRequest(BaseModel):
+    plan_id: str
+    source_session_id: str
+    action: Literal["accept_full", "split", "approve_limit", "backlog"]
+
+
+class RescheduleResponse(BaseModel):
+    sessions: list[StudySession]
+    changes: list[PlanChange] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    unscheduled: list[str] = Field(default_factory=list)
+    reschedule: RescheduleProposal
 
 
 class SessionCreateRequest(BaseModel):

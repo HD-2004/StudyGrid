@@ -5,7 +5,7 @@ fixed commitment, nothing past an exam, daily budgets respected.
 """
 
 import sys
-from datetime import date, timedelta, time
+from datetime import date, datetime, timedelta, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -19,9 +19,17 @@ from app.models import (
     Recall,
     Strategy,
     Subject,
+    StudySession,
     Topic,
 )
-from app.scheduler import TimeAllocator, build_plan, record_progress
+from app.scheduler import (
+    TimeAllocator,
+    build_plan,
+    commit_reschedule,
+    propose_full_reschedule,
+    propose_split_reschedule,
+    record_progress,
+)
 
 START = date(2026, 9, 21)  # a Monday
 
@@ -405,19 +413,64 @@ assert "final study day" in exam_changes[0].why
 check_invariants(exam_plan, exam_availability, "exam-cap", exam_dates)
 print("[ok] next review is capped at the final pre-exam study day")
 
-# --- Progress: missed session moves, never disappears -------------------
+# --- Progress: cancelled occurrence disappears; replacement needs consent
 missed = next(s for s in plan.sessions if s.completion == Completion.planned)
 before = len(plan.sessions)
 old_start = missed.start
 plan, changes2 = record_progress(plan, missed, Completion.not_completed, None, allocator, EXAMS)
-assert len(plan.sessions) == before, "reschedule must not drop or duplicate sessions"
-moved = [s for s in plan.sessions if s.topic == missed.topic and s.start > old_start]
-assert moved, "missed session should move later"
+assert len(plan.sessions) == before - 1, "cancelled block must leave the active calendar"
+assert all(s.id != missed.id for s in plan.sessions)
+assert plan.history[-1].completion == Completion.not_completed
+assert changes2 and changes2[0].type.value == "cancelled"
+
+slot = propose_full_reschedule(missed, allocator, EXAMS)
+assert slot is not None, "a replacement should be proposed without being committed"
+assert len(plan.sessions) == before - 1
+replacements, replacement_changes = commit_reschedule(
+    plan, missed, allocator, [slot], split=False
+)
+assert len(replacements) == 1
+assert replacements[0].id != missed.id
+assert replacements[0].rescheduled_from_id == missed.id
+assert replacements[0].start > old_start
+assert replacement_changes[0].type.value == "moved"
 check_invariants(plan, AVAILABILITY, "missed")
-assert changes2 and changes2[0].type.value in ("moved", "blocked")
 assert {s.id for s in plan.sessions}.__len__() == len(plan.sessions), "session ids must be unique"
-print(f"MISSED: {missed.topic} moved off {old_start:%a %m-%d %H:%M}")
-print(f"  change reported: {changes2[0].why}")
+print(f"MISSED: {missed.topic} removed from {old_start:%a %m-%d %H:%M}")
+print(f"  approved replacement: {replacements[0].start:%a %m-%d %H:%M}")
+
+# --- Recovery split: 15 minutes/day, then explicit cap increase ----------
+split_availability = Availability(
+    weekday_minutes={day: 15 for day in range(7)},
+    earliest=time(9, 0),
+    latest=time(12, 0),
+    session_length_minutes=15,
+)
+split_allocator = TimeAllocator(split_availability)
+split_source = StudySession(
+    subject="Recovery",
+    topic="Cancelled long task",
+    start=datetime(2026, 9, 21, 9, 0),
+    end=datetime(2026, 9, 21, 10, 0),
+    completion=Completion.not_completed,
+)
+split_exams = {"Recovery": date(2026, 10, 20)}
+for offset in range(1, 8):
+    day = split_source.start.date() + timedelta(days=offset)
+    assert split_allocator.allocate(15, day, day) is not None
+
+strict_slots, strict_remaining, _ = propose_split_reschedule(
+    split_source, split_allocator, split_exams
+)
+assert not strict_slots and strict_remaining == 60
+extra_slots, extra_remaining, extra_minutes = propose_split_reschedule(
+    split_source,
+    split_allocator,
+    split_exams,
+    daily_extra_minutes=15,
+)
+assert len(extra_slots) == 4 and extra_remaining == 0 and extra_minutes == 60
+print("[ok] 15-minute recovery blocks require consent before exceeding daily caps")
 
 # --- Entry point 3: exam rush -------------------------------------------
 rush_subject = Subject(

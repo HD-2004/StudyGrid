@@ -27,7 +27,16 @@ from ..models import (
     PlanRequest,
     StudySession,
 )
-from ..scheduler import build_plan, record_progress
+from ..scheduler import (
+    RECOVERY_CHUNK_MINUTES,
+    RESCHEDULE_WINDOW_DAYS,
+    build_plan,
+    commit_reschedule,
+    propose_full_reschedule,
+    propose_split_reschedule,
+    record_progress,
+    reschedule_window,
+)
 from ..security import clear_session_cookie, get_owner_id
 from ..store import PlanRecord, PlanRepository, build_repository_from_env
 from .schemas import (
@@ -47,6 +56,10 @@ from .schemas import (
     PrivacyResponse,
     ProgressRequest,
     ProgressResponse,
+    RescheduleProposal,
+    RescheduleRequest,
+    RescheduleResponse,
+    RescheduleSlot,
     SessionCreateRequest,
     SessionUpdateRequest,
     ReasonOption,
@@ -80,6 +93,33 @@ def _response_for(record: PlanRecord) -> PlanResponse:
         summary=record.plan.summary,
         warnings=record.plan.warnings,
         unscheduled=record.plan.unscheduled,
+    )
+
+
+def _reschedule_proposal(
+    session: StudySession,
+    exam_dates: dict[str, date],
+    status: str,
+    slots: list[tuple] | None = None,
+    extra_minutes: int = 0,
+) -> RescheduleProposal:
+    window = reschedule_window(session, exam_dates)
+    search_through = (
+        window[1]
+        if window
+        else session.start.date() + timedelta(days=RESCHEDULE_WINDOW_DAYS)
+    )
+    return RescheduleProposal(
+        source_session_id=session.id,
+        subject=session.subject,
+        topic=session.topic,
+        duration_minutes=session.duration_minutes,
+        status=status,
+        slots=[RescheduleSlot(start=start, end=end) for start, end in slots or []],
+        extra_minutes=extra_minutes,
+        search_through=search_through,
+        search_days=RESCHEDULE_WINDOW_DAYS,
+        chunk_minutes=RECOVERY_CHUNK_MINUTES,
     )
 
 
@@ -363,6 +403,15 @@ def submit_progress(
         miss_reason=request.miss_reason,
     )
     record.plan = plan
+    reschedule = None
+    if request.completion is Completion.not_completed:
+        proposed_slot = propose_full_reschedule(session, record.allocator, record.exam_dates)
+        reschedule = _reschedule_proposal(
+            session,
+            record.exam_dates,
+            "full_slot" if proposed_slot else "no_full_slot",
+            [proposed_slot] if proposed_slot else [],
+        )
     repo.save(record, owner_id)
     if request.completion is Completion.completed:
         repo.save_activity(
@@ -412,7 +461,174 @@ def submit_progress(
         sessions=plan.sessions,
         changes=changes,
         warnings=plan.warnings,
+        unscheduled=plan.unscheduled,
         insights=build_insights(plan.history),
+        reschedule=reschedule,
+    )
+
+
+@router.post("/reschedule", response_model=RescheduleResponse)
+def reschedule_cancelled_session(
+    request: RescheduleRequest,
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> RescheduleResponse:
+    """Apply the student's chosen recovery path for one cancelled block."""
+    record = repo.load(request.plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+
+    source = next(
+        (
+            item
+            for item in reversed(record.plan.history)
+            if item.id == request.source_session_id
+            and item.completion is Completion.not_completed
+        ),
+        None,
+    )
+    if source is None:
+        raise HTTPException(status_code=404, detail="Cancelled session not found.")
+    if any(
+        item.rescheduled_from_id == source.id for item in record.plan.sessions
+    ):
+        raise HTTPException(status_code=409, detail="This task has already been rescheduled.")
+
+    backlog_item = f"{source.subject}: {source.topic} · {source.duration_minutes} min"
+    changes = []
+    proposal: RescheduleProposal
+
+    if request.action == "backlog":
+        if backlog_item not in record.plan.unscheduled:
+            record.plan.unscheduled.append(backlog_item)
+        proposal = _reschedule_proposal(
+            source, record.exam_dates, "backlog"
+        )
+        repo.save(record, owner_id)
+    elif request.action == "accept_full":
+        slot = propose_full_reschedule(source, record.allocator, record.exam_dates)
+        if slot is None:
+            proposal = _reschedule_proposal(
+                source, record.exam_dates, "no_full_slot"
+            )
+        else:
+            replacements, changes = commit_reschedule(
+                record.plan, source, record.allocator, [slot], split=False
+            )
+            if not replacements:
+                raise HTTPException(
+                    status_code=409,
+                    detail="That proposed time is no longer available. Please try again.",
+                )
+            proposal = _reschedule_proposal(
+                source, record.exam_dates, "scheduled", [slot]
+            )
+            repo.save(record, owner_id)
+    elif request.action == "split":
+        slots, remaining, _ = propose_split_reschedule(
+            source, record.allocator, record.exam_dates
+        )
+        if remaining == 0:
+            replacements, changes = commit_reschedule(
+                record.plan, source, record.allocator, slots, split=True
+            )
+            if not replacements:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The recovery slots changed. Please try again.",
+                )
+            proposal = _reschedule_proposal(
+                source, record.exam_dates, "scheduled", slots
+            )
+            repo.save(record, owner_id)
+        else:
+            override_slots: list[tuple] = []
+            override_extra = 0
+            override_remaining = source.duration_minutes
+            # Find the smallest 15-minute daily cap increase that can recover
+            # the whole task. The UI shows this exact cost before committing.
+            for daily_extra in range(
+                RECOVERY_CHUNK_MINUTES,
+                source.duration_minutes + RECOVERY_CHUNK_MINUTES,
+                RECOVERY_CHUNK_MINUTES,
+            ):
+                candidate_slots, candidate_remaining, candidate_extra = (
+                    propose_split_reschedule(
+                        source,
+                        record.allocator,
+                        record.exam_dates,
+                        daily_extra_minutes=daily_extra,
+                    )
+                )
+                if candidate_remaining == 0:
+                    override_slots = candidate_slots
+                    override_remaining = 0
+                    override_extra = candidate_extra
+                    break
+            if override_remaining == 0:
+                proposal = _reschedule_proposal(
+                    source,
+                    record.exam_dates,
+                    "needs_limit_approval",
+                    override_slots,
+                    override_extra,
+                )
+            else:
+                if backlog_item not in record.plan.unscheduled:
+                    record.plan.unscheduled.append(backlog_item)
+                proposal = _reschedule_proposal(
+                    source, record.exam_dates, "backlog"
+                )
+                repo.save(record, owner_id)
+    else:  # approve_limit
+        approved_slots: list[tuple] = []
+        approved_extra = 0
+        for daily_extra in range(
+            RECOVERY_CHUNK_MINUTES,
+            source.duration_minutes + RECOVERY_CHUNK_MINUTES,
+            RECOVERY_CHUNK_MINUTES,
+        ):
+            candidate_slots, remaining, extra = propose_split_reschedule(
+                source,
+                record.allocator,
+                record.exam_dates,
+                daily_extra_minutes=daily_extra,
+            )
+            if remaining == 0:
+                approved_slots = candidate_slots
+                approved_extra = extra
+                break
+        if not approved_slots:
+            if backlog_item not in record.plan.unscheduled:
+                record.plan.unscheduled.append(backlog_item)
+            proposal = _reschedule_proposal(
+                source, record.exam_dates, "backlog"
+            )
+            repo.save(record, owner_id)
+        else:
+            replacements, changes = commit_reschedule(
+                record.plan, source, record.allocator, approved_slots, split=True
+            )
+            if not replacements:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The recovery slots changed. Please try again.",
+                )
+            proposal = _reschedule_proposal(
+                source,
+                record.exam_dates,
+                "scheduled",
+                approved_slots,
+                approved_extra,
+            )
+            repo.save(record, owner_id)
+
+    return RescheduleResponse(
+        sessions=record.plan.sessions,
+        changes=changes,
+        warnings=record.plan.warnings,
+        unscheduled=record.plan.unscheduled,
+        reschedule=proposal,
     )
 
 

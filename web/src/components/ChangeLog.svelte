@@ -77,6 +77,11 @@
     background: color-mix(in srgb, var(--flag) 8%, var(--surface));
   }
 
+  li.cancelled {
+    border-color: color-mix(in srgb, var(--danger) 42%, var(--rule));
+    background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  }
+
   .topic {
     display: block;
     font-weight: 600;

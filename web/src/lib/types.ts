@@ -5,7 +5,7 @@ export type Difficulty = 'easy' | 'medium' | 'hard'
 export type Completion = 'planned' | 'completed' | 'partial' | 'not_completed'
 export type Recall = 'well' | 'medium' | 'poor'
 export type Strategy = 'fresh' | 'remaining' | 'exam_rush'
-export type ChangeType = 'moved' | 'added' | 'kept' | 'blocked'
+export type ChangeType = 'moved' | 'added' | 'kept' | 'blocked' | 'cancelled'
 export type ChatRole = 'user' | 'assistant'
 export type ActivityCategory =
   | 'study'
@@ -105,6 +105,7 @@ export interface StudySession {
   miss_reason: MissReason | null
   repetition: number
   rationale: string
+  rescheduled_from_id: string | null
 }
 
 export interface PlanResponse {
@@ -134,6 +135,7 @@ export interface CalendarEvent {
   recall: Recall | null
   rationale: string
   is_review: boolean
+  rescheduled_from_id: string | null
 }
 
 export interface SessionCreateInput {
@@ -164,7 +166,44 @@ export interface ProgressResponse {
   sessions: StudySession[]
   changes: PlanChange[]
   warnings: string[]
+  unscheduled: string[]
   insights: Insights | null
+  reschedule: RescheduleProposal | null
+}
+
+export type RescheduleStatus =
+  | 'full_slot'
+  | 'no_full_slot'
+  | 'needs_limit_approval'
+  | 'scheduled'
+  | 'backlog'
+
+export type RescheduleAction = 'accept_full' | 'split' | 'approve_limit' | 'backlog'
+
+export interface RescheduleSlot {
+  start: string
+  end: string
+}
+
+export interface RescheduleProposal {
+  source_session_id: string
+  subject: string
+  topic: string
+  duration_minutes: number
+  status: RescheduleStatus
+  slots: RescheduleSlot[]
+  extra_minutes: number
+  search_through: string
+  search_days: number
+  chunk_minutes: number
+}
+
+export interface RescheduleResponse {
+  sessions: StudySession[]
+  changes: PlanChange[]
+  warnings: string[]
+  unscheduled: string[]
+  reschedule: RescheduleProposal
 }
 
 export interface AnalyzeResponse {

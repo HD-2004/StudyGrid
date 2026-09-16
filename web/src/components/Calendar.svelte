@@ -26,6 +26,7 @@
 
   let {
     events,
+    unscheduled,
     theme,
     onSelect,
     onMove,
@@ -39,6 +40,7 @@
     deletingData,
   }: {
     events: CalendarEvent[]
+    unscheduled: string[]
     theme: Theme
     onSelect: (id: string) => void
     onMove: (id: string, start: string, end: string) => Promise<void>
@@ -415,6 +417,15 @@
         {/each}
       </section>
 
+      {#if unscheduled.length}
+        <section class="backlog-list" aria-labelledby="unscheduled-heading">
+          <header><h2 id="unscheduled-heading">Chưa xếp lịch</h2><span>{unscheduled.length}</span></header>
+          <ul>
+            {#each unscheduled as item (item)}<li>{item}</li>{/each}
+          </ul>
+        </section>
+      {/if}
+
       <button class="progress-link" type="button" onclick={onOpenProgress}><span aria-hidden="true">▥</span>Tiến độ</button>
 
       <div class="status-legend" aria-label="Trạng thái sự kiện">
@@ -455,6 +466,7 @@
                     type="button"
                     class={`sx__event calendar-event ${eventColor(event)}`}
                     class:completed={event.completion === 'completed'}
+                    class:rescheduled={Boolean(event.rescheduled_from_id)}
                     class:dragging={interaction?.id === event.id}
                     style={eventStyle(event)}
                     aria-label={`${event.title}, ${formatTime(times.start)} đến ${formatTime(times.end)}, ${event.completion === 'completed' ? 'Completed' : 'Pending'}`}
@@ -533,7 +545,7 @@
 <style>
   .calendar-app { height: 100dvh; min-height: 680px; overflow: hidden; background: var(--page); color: var(--ink); }
   .calendar-toolbar { height: 64px; display: grid; grid-template-columns: 240px minmax(430px, 1fr) auto; align-items: center; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--rule); background: var(--surface); }
-  .toolbar-brand, .date-navigation, .toolbar-actions, .calendar-brand, .mini-calendar header, .calendar-list header, .ai-panel header, .ai-panel header > div, .preview-actions { display: flex; align-items: center; }
+  .toolbar-brand, .date-navigation, .toolbar-actions, .calendar-brand, .mini-calendar header, .calendar-list header, .backlog-list header, .ai-panel header, .ai-panel header > div, .preview-actions { display: flex; align-items: center; }
   .toolbar-brand { gap: 12px; }
   .calendar-brand { gap: 10px; color: var(--ink); text-decoration: none; font-size: 18px; }
   .grid-mark { width: 28px; height: 28px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; }
@@ -576,6 +588,12 @@
   .calendar-list header button { font-size: 18px; }
   .calendar-list label { min-height: 34px; display: grid; grid-template-columns: 16px 8px 1fr; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12px; cursor: pointer; }
   .calendar-list input { width: 15px; height: 15px; accent-color: var(--accent); }
+  .backlog-list { margin-top: 22px; }
+  .backlog-list header { justify-content: space-between; }
+  .backlog-list h2 { margin: 0; font-size: 13px; }
+  .backlog-list header span { min-width: 22px; padding: 2px 6px; border-radius: 999px; background: var(--surface-subtle); color: var(--ink-soft); font-size: 10px; text-align: center; }
+  .backlog-list ul { max-height: 118px; overflow: auto; margin: 8px 0 0; padding: 0; list-style: none; }
+  .backlog-list li { padding: 7px 0; border-bottom: 1px solid var(--rule); color: var(--ink-soft); font-size: 10px; line-height: 1.35; }
   .subject-color { width: 7px; height: 7px; border-radius: 50%; }
   .progress-link { width: 100%; min-height: 42px; display: flex; align-items: center; gap: 12px; margin-top: 22px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font-weight: 650; text-align: left; }
   .progress-link:hover { background: var(--surface-subtle); }
@@ -609,6 +627,7 @@
   .calendar-event.dragging { z-index: 8; opacity: .88; outline: 2px solid var(--focus); box-shadow: var(--shadow-raised); }
   .calendar-event.completed { opacity: .62; cursor: pointer; }
   .calendar-event.completed .event-title { text-decoration: line-through; }
+  .calendar-event.rescheduled:not(.completed) { outline: 2px solid color-mix(in srgb, #a98cf3 72%, transparent); outline-offset: -2px; }
   .event-title { width: calc(100% - 14px); overflow: hidden; font-size: 11px; font-weight: 750; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
   .event-time { margin-top: 2px; font-size: 9px; line-height: 1.2; }
   .event-status { position: absolute; right: 5px; top: 4px; font-size: 12px; }

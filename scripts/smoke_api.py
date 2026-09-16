@@ -156,8 +156,8 @@ r = client.get(f"/api/plan/{plan_id}/events")
 assert len(r.json()) == len(body["sessions"]), "change did not persist"
 print("[ok] adaptation persisted")
 
-# Manual calendar CRUD: newly-created tasks persist as pending, time edits are
-# stored, and cancellation captures a reason before moving to a new free slot.
+# Manual calendar CRUD: cancellation removes the old block, captures a reason,
+# previews the next seven days, and creates a fresh attempt only after consent.
 manual_start = START + timedelta(days=7)
 r = client.post(
     f"/api/plan/{plan_id}/sessions",
@@ -200,16 +200,33 @@ r = client.post(
 assert r.status_code == 200, r.text
 cancelled = r.json()
 change = next(change for change in cancelled["changes"] if change["session_id"] == manual["id"])
-assert change["type"] == "moved"
-assert change["moved_from"] != change["moved_to"]
+assert change["type"] == "cancelled"
+assert all(item["id"] != manual["id"] for item in cancelled["sessions"])
+assert cancelled["reschedule"]["status"] == "full_slot"
+
+r = client.post(
+    "/api/reschedule",
+    json={
+        "plan_id": plan_id,
+        "source_session_id": manual["id"],
+        "action": "accept_full",
+    },
+)
+assert r.status_code == 200, r.text
+rescheduled = r.json()
+assert rescheduled["reschedule"]["status"] == "scheduled"
+replacement = next(
+    item for item in rescheduled["sessions"] if item["rescheduled_from_id"] == manual["id"]
+)
+assert replacement["id"] != manual["id"]
 
 r = client.get(f"/api/activities?days=7&end={date.today().isoformat()}")
 assert r.status_code == 200, r.text
 cancel_logs = [item for item in r.json()["activities"] if item["source"] == "cancelled_session"]
 assert cancel_logs and cancel_logs[0]["category"] == "work"
-print("[ok] calendar CRUD + required cancel reason + automatic reschedule + dashboard sync")
+print("[ok] calendar CRUD + cancel reason + consent-based reschedule + dashboard sync")
 
-r = client.delete(f"/api/plan/{plan_id}/sessions/{manual['id']}")
+r = client.delete(f"/api/plan/{plan_id}/sessions/{replacement['id']}")
 assert r.status_code == 204, r.text
 
 # Reset removes only the requested plan and makes subsequent access fail.
