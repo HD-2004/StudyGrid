@@ -8,10 +8,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from ..ai import MaterialAnalyzer, build_analyzer_from_env
 from ..models import PlanRequest
 from ..scheduler import build_plan, record_progress
 from ..store import InMemoryRepository, PlanRecord, PlanRepository
 from .schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
     CalendarEvent,
     PlanResponse,
     ProgressRequest,
@@ -23,10 +26,25 @@ router = APIRouter(prefix="/api")
 # Single process-local store for the demo. Swapped for SQLite by changing this
 # one line, since callers depend only on the protocol.
 _repo = InMemoryRepository()
+_material_analyzer = build_analyzer_from_env()
 
 
 def get_repo() -> PlanRepository:
     return _repo
+
+
+def get_material_analyzer() -> MaterialAnalyzer:
+    return _material_analyzer
+
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+def analyze_material(
+    request: AnalyzeRequest,
+    analyzer: MaterialAnalyzer = Depends(get_material_analyzer),
+) -> AnalyzeResponse:
+    """Extract scheduler-ready topics from pasted course material (6.1)."""
+    result = analyzer.analyze(request.subject, request.text)
+    return AnalyzeResponse(topics=result.topics, source=result.source)
 
 
 @router.post("/plan", response_model=PlanResponse)

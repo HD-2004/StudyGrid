@@ -33,7 +33,7 @@ Rejected: Opisek/luna (no license file, unlicensed).
 ## Stack
 
 Python 3.14 + FastAPI backend. Schedule-X (MIT) for the calendar UI.
-LLM provider not yet chosen.
+OpenAI Responses API for material analysis, with a deterministic fallback.
 
 Python 3.14 is new: always install with `--only-binary=:all:`. Older pins of
 pydantic force a source build of pydantic-core, which needs the MSVC linker and
@@ -77,17 +77,20 @@ See `ARCHITECTURE.md` for the diagrams and the full contract.
 `HACKATHON.md` is the spec. `PLAN.md` is the phased build order and cut list.
 `ARCHITECTURE.md` is the layer contract.
 
-Both smoke tests must pass after any backend change:
+All smoke tests must pass after any backend change:
 ```
+.venv\Scripts\python.exe scripts\smoke_ai.py
 .venv\Scripts\python.exe scripts\smoke_scheduler.py
 .venv\Scripts\python.exe scripts\smoke_api.py
 ```
-They assert no overlaps, no collisions with fixed commitments, nothing past an
-exam date, budgets respected, and that adaptations persist.
+They assert provider fallback and validation, no overlaps, no collisions with
+fixed commitments, nothing past an exam date, budgets respected, and that
+adaptations persist.
 
 ## Commands
 
 ```
+.venv\Scripts\python.exe scripts\smoke_ai.py             # verify material analysis
 .venv\Scripts\python.exe scripts\smoke_scheduler.py      # verify scheduler
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload  # dev server
 .venv\Scripts\python.exe -m pip install --only-binary=:all: <pkg>

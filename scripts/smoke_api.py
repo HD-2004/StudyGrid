@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient
 
+from app.ai import MaterialAnalyzer
+from app.api.routes import get_material_analyzer
 from app.main import app
 
 client = TestClient(app)
@@ -18,6 +20,33 @@ START = date(2026, 9, 21)
 
 assert client.get("/health").json() == {"status": "ok"}
 print("[ok] health")
+
+# Material analysis must remain useful with no network or API key.
+app.dependency_overrides[get_material_analyzer] = lambda: MaterialAnalyzer()
+r = client.post(
+    "/api/analyze",
+    json={
+        "subject": "Biology",
+        "text": """# Cell Biology
+- Cell structure and organelles
+- Cell division
+- Advanced gene regulation
+""",
+    },
+)
+assert r.status_code == 200, f"{r.status_code}: {r.text}"
+analysis = r.json()
+assert analysis["source"] == "fallback"
+assert len(analysis["topics"]) >= 3
+assert all(
+    {"name", "difficulty", "estimated_minutes", "depends_on"} <= set(topic)
+    for topic in analysis["topics"]
+)
+assert client.post(
+    "/api/analyze", json={"subject": "Biology", "text": "   "}
+).status_code == 422
+app.dependency_overrides.pop(get_material_analyzer)
+print(f"[ok] POST /api/analyze -> {len(analysis['topics'])} fallback topics")
 
 payload = {
     "start_date": START.isoformat(),

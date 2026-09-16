@@ -26,39 +26,49 @@ Status legend: [x] done and verified, [ ] not started
 
 Checkpoint reached: full CREATE -> ADAPT loop over HTTP, no UI.
 
-## Phase 2 — AI material analysis (~3h, 6.1)
+## Phase 2 — AI material analysis (done)
 
-- [ ] `LLMProvider` protocol: one method, syllabus text -> validated `Topic` list
-- [ ] One concrete provider (pending your decision), structured output
-- [ ] Deterministic fallback so the demo survives an API outage or dead key
-- [ ] `POST /api/analyze` — paste syllabus text, get topics back
+- [x] `LLMProvider` protocol: one method, syllabus text -> validated `Topic` list
+- [x] OpenAI Responses API provider using Pydantic Structured Outputs
+- [x] Live OpenAI analysis verified with `source: "ai"`
+- [x] Deterministic fallback so the demo survives an API outage or dead key
+- [x] `POST /api/analyze` — paste syllabus text, get topics back
+- [x] Offline AI smoke check (`scripts/smoke_ai.py`)
 
 Checkpoint: paste a syllabus, get topics with difficulty and time estimates.
 
 Note: the LLM decides *what* to study; the scheduler decides *when*. Models that
 emit wall-clock times produce overlapping slots.
 
-## Phase 2.5 — Frontend (moved earlier at your request, ~5h)
+## Phase 2.5 — Frontend (done)
 
 Buildable now: the HTTP contract is fixed and verified, so `lib/api.ts` can be
 mocked and swapped for real calls with no component changes.
 
-- [ ] Vite + Svelte scaffold in `web/`
-- [ ] `lib/types.ts` mirroring the contract, `lib/api.ts` as the only fetch site
-- [ ] Schedule-X calendar rendering `/api/plan/{id}/events`
-- [ ] Intake form: subjects, exam dates, availability, fixed commitments
-- [ ] Session detail: completion + recall entry
-- [ ] ChangeLog panel rendering `changes[]`
-- [ ] Visual distinction between first passes and reviews
+- [x] Vite + Svelte scaffold in `web/`
+- [x] `lib/types.ts` mirroring the contract, `lib/api.ts` as the only fetch site
+- [x] Schedule-X calendar rendering `/api/plan/{id}/events`
+- [x] Intake form: subjects, exam dates, availability, fixed commitments
+- [x] Session detail: completion + recall entry
+- [x] ChangeLog panel rendering `changes[]`
+- [x] Visual distinction between first passes and reviews
+- [x] Light/dark themes, responsive mobile layout, and full UI states
+- [x] Calendar-first Material 3 redesign inspired by Google Calendar
+- [x] Browser test for ANALYZE -> CREATE -> ADAPT (`web/tests/app.spec.ts`)
 
 Checkpoint: end-to-end demo in a browser.
 
-## Phase 4 — Demo polish (~3h, sections 11-12)
+## Phase 4 — Demo polish (prepared, next)
 
-- [ ] Seed data for all three entry points, loadable in one click
-- [ ] Make adaptation visible: show what moved and why
-- [ ] Empty and over-capacity states worded honestly
-- [ ] Mobile layout check (judges use phones)
+- [x] Keep the calendar interactive on first load; setup opens only on request
+- [x] Make adaptation visible: show what moved and why
+- [x] Empty and over-capacity states worded honestly
+- [x] Mobile and dark-mode browser checks
+- [ ] Add three one-click judge presets: fresh start, mid-semester, exam rush
+- [ ] Show whether material analysis used OpenAI or the offline fallback
+- [ ] Add a short guided demo path with a reliable reset action
+- [ ] Run a keyboard and screen-reader pass on the complete judge flow
+- [ ] Prepare deployment configuration and a production smoke checklist
 
 ## Phase 5 — If time remains
 
@@ -74,5 +84,4 @@ works without all four.
 
 ## Open decisions
 
-1. LLM provider — blocks Phase 2
-2. Sections 9, 10, 11, 12 of HACKATHON.md are empty and are judged
+1. Sections 10, 11, and 12 of HACKATHON.md are empty and are judged

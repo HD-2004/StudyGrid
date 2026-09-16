@@ -178,6 +178,22 @@ StudyGrid creates a schedule containing:
 
 ## 9. AI Component
 
+StudyGrid uses AI only for material analysis: turning pasted syllabus text into
+a validated list of topics with difficulty, estimated learning time, and topic
+dependencies. The AI does not create calendar timestamps. A deterministic
+scheduler places the resulting topics so sessions cannot overlap fixed
+commitments or extend beyond an exam deadline.
+
+The model provider is isolated behind an `LLMProvider` interface. The MVP uses
+the OpenAI Responses API with Pydantic Structured Outputs, and validates every
+result against the shared `Topic` model before it reaches the scheduler.
+
+If the API key is missing, the request times out, the provider is unavailable,
+or its response is invalid, StudyGrid automatically extracts topics from
+headings and list items with a deterministic fallback. The API response reports
+`source: "ai"` or `source: "fallback"` so the UI can explain which path was
+used. This keeps the live demo functional without hiding provider failures.
+
 ## 10. MVP Scope
 
 ### Must Have

@@ -8,14 +8,16 @@ scheduler produces.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..models import (
     Completion,
     PlanChange,
     Recall,
     StudySession,
+    Topic,
 )
 
 
@@ -82,10 +84,14 @@ class ProgressResponse(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    subject: str
-    text: str = Field(min_length=1)
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    subject: str = Field(min_length=1, max_length=200)
+    # Keeps provider cost and latency bounded for the pasted-text MVP. File
+    # ingestion and chunking are deliberately deferred.
+    text: str = Field(min_length=1, max_length=30_000)
 
 
 class AnalyzeResponse(BaseModel):
-    topics: list[dict]
-    source: str  # "ai" or "fallback"
+    topics: list[Topic]
+    source: Literal["ai", "fallback"]
