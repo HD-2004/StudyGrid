@@ -1,0 +1,203 @@
+"""Domain models for StudyGrid.
+
+Contract between the AI layer, the scheduler, and the calendar frontend.
+Deliberately provider-independent: nothing here knows about any LLM.
+
+Maps to HACKATHON.md sections 6.1-6.6.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, time
+from enum import Enum
+from uuid import uuid4
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class Difficulty(str, Enum):
+    easy = "easy"
+    medium = "medium"
+    hard = "hard"
+
+
+class Completion(str, Enum):
+    """HACKATHON.md 6.6, first axis: did the session happen."""
+
+    planned = "planned"
+    completed = "completed"
+    partial = "partial"
+    not_completed = "not_completed"
+
+
+class Recall(str, Enum):
+    """HACKATHON.md 6.6, second axis: how well the material was recalled.
+
+    This is what drives adaptive review intervals. Without it the schedule is
+    just a calendar; with it the plan responds to actual learning.
+    """
+
+    well = "well"  # mostly recalled
+    medium = "medium"  # ~50%
+    poor = "poor"  # little to nothing
+
+
+# How recall quality stretches or compresses the next review interval.
+# Loosely SM-2: success expands, failure pulls the review forward.
+RECALL_MULTIPLIER: dict[Recall, float] = {
+    Recall.well: 2.0,
+    Recall.medium: 1.0,
+    Recall.poor: 0.5,
+}
+
+
+class Strategy(str, Enum):
+    """HACKATHON.md section 7, the three entry points."""
+
+    fresh = "fresh"  # full plan, all passes
+    remaining = "remaining"  # mid-semester, skip mastered material
+    exam_rush = "exam_rush"  # not enough time, triage coverage over depth
+
+
+class Topic(BaseModel):
+    """One unit of material to study.
+
+    Produced by AI material analysis (6.1) or entered by hand.
+    """
+
+    name: str
+    difficulty: Difficulty = Difficulty.medium
+    estimated_minutes: int = Field(default=60, ge=15, le=600)
+    # Mid-semester entry point: material already covered needs review, not a
+    # first pass.
+    already_studied: bool = False
+    # 6.1 relationships between concepts. Names of topics that should be
+    # scheduled before this one.
+    depends_on: list[str] = Field(default_factory=list)
+
+
+class Subject(BaseModel):
+    name: str
+    exam_date: date
+    topics: list[Topic] = Field(default_factory=list)
+    priority: int = Field(default=3, ge=1, le=5)
+
+
+class BusyBlock(BaseModel):
+    """A recurring fixed commitment: lectures, work, commute (6.2).
+
+    Study sessions must not overlap these.
+    """
+
+    weekday: int = Field(ge=0, le=6)  # 0 = Monday
+    start: time
+    end: time
+    label: str = ""
+
+    @model_validator(mode="after")
+    def _check_order(self) -> BusyBlock:
+        if self.start >= self.end:
+            raise ValueError(f"busy block start {self.start} must precede end {self.end}")
+        return self
+
+
+class Availability(BaseModel):
+    """When the student can actually study (6.2).
+
+    weekday_minutes maps weekday index (0 = Monday) to a daily cap in minutes.
+    Absent or zero means no study that day.
+    """
+
+    weekday_minutes: dict[int, int] = Field(default_factory=dict)
+    earliest: time = time(9, 0)
+    latest: time = time(22, 0)
+    session_length_minutes: int = Field(default=50, ge=15, le=180)
+    break_minutes: int = Field(default=10, ge=0, le=60)
+    busy: list[BusyBlock] = Field(default_factory=list)
+
+    @field_validator("weekday_minutes")
+    @classmethod
+    def _check_weekdays(cls, v: dict[int, int]) -> dict[int, int]:
+        for day, minutes in v.items():
+            if not 0 <= day <= 6:
+                raise ValueError(f"weekday must be 0-6, got {day}")
+            if minutes < 0:
+                raise ValueError(f"minutes must be non-negative, got {minutes}")
+        return v
+
+    @model_validator(mode="after")
+    def _check_window(self) -> Availability:
+        if self.earliest >= self.latest:
+            raise ValueError("earliest must precede latest")
+        return self
+
+
+def _new_id() -> str:
+    return uuid4().hex[:12]
+
+
+class StudySession(BaseModel):
+    """A single scheduled block. This is what renders on the calendar."""
+
+    # Stable across rescheduling: the frontend references sessions by id, and a
+    # session's position in the list changes whenever the plan adapts.
+    id: str = Field(default_factory=_new_id)
+    subject: str
+    topic: str
+    start: datetime
+    end: datetime
+    completion: Completion = Completion.planned
+    recall: Recall | None = None
+    # Which pass over the material: 1 = first study, 2+ = review.
+    repetition: int = Field(default=1, ge=1)
+    rationale: str = ""
+
+    @property
+    def duration_minutes(self) -> int:
+        return int((self.end - self.start).total_seconds() // 60)
+
+    @property
+    def needs_followup(self) -> bool:
+        """Poor recall or an unfinished session means the plan should react."""
+        return (
+            self.completion in (Completion.partial, Completion.not_completed)
+            or self.recall == Recall.poor
+        )
+
+
+class PlanRequest(BaseModel):
+    subjects: list[Subject]
+    availability: Availability
+    start_date: date | None = None
+    strategy: Strategy = Strategy.fresh
+    notes: str = ""
+
+
+class StudyPlan(BaseModel):
+    sessions: list[StudySession] = Field(default_factory=list)
+    summary: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    # Set when the calendar cannot fit everything, so the UI can say so plainly
+    # instead of quietly dropping material.
+    unscheduled: list[str] = Field(default_factory=list)
+
+
+class ChangeType(str, Enum):
+    moved = "moved"
+    added = "added"
+    blocked = "blocked"  # wanted to adapt but had no room
+
+
+class PlanChange(BaseModel):
+    """One adaptation, described for the UI.
+
+    An adaptation the student cannot see looks like a bug, so every change the
+    scheduler makes is reported rather than silently applied.
+    """
+
+    type: ChangeType
+    topic: str
+    why: str
+    session_id: str | None = None
+    moved_from: datetime | None = None
+    moved_to: datetime | None = None

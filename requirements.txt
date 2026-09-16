@@ -1,0 +1,8 @@
+# Pinned to versions with prebuilt wheels for Python 3.14 (cp314).
+# Older pins force a source build of pydantic-core, which needs the MSVC
+# linker and fails on a machine without Visual Studio build tools.
+fastapi==0.141.1
+uvicorn==0.53.0
+pydantic==2.13.5
+python-dotenv==1.2.3
+httpx==0.28.1
