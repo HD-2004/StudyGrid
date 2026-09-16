@@ -1,46 +1,87 @@
 <script lang="ts">
-  import { IconAlertTriangle, IconArrowRight, IconCalendarPlus } from '@tabler/icons-svelte'
+  // Renders changes[] from the progress response. An adaptation the student
+  // cannot see reads as a bug, so every change the scheduler makes is shown.
   import type { PlanChange } from '../lib/types'
 
-  export let changes: PlanChange[] = []
+  let { changes }: { changes: PlanChange[] } = $props()
 
-  function formatDate(value: string | null): string {
-    if (!value) return ''
-    return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+  function time(iso: string | null): string {
+    if (!iso) return ''
+    return new Date(iso).toLocaleString(undefined, {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
   }
 </script>
 
 {#if changes.length}
-  <section class="change-log" aria-live="polite">
-    <div class="change-log-heading">
-      <h2>Your plan adapted</h2>
-      <span>{changes.length} {changes.length === 1 ? 'change' : 'changes'}</span>
-    </div>
-    <div class="change-list">
-      {#each changes as change}
-        <article class="change-item">
-          <div class="change-icon" class:blocked={change.type === 'blocked'}>
-            {#if change.type === 'blocked'}
-              <IconAlertTriangle size={18} stroke={1.8} aria-hidden="true" />
-            {:else}
-              <IconCalendarPlus size={18} stroke={1.8} aria-hidden="true" />
-            {/if}
-          </div>
-          <div>
-            <h3>{change.topic}</h3>
-            <p>{change.why}</p>
-            {#if change.moved_from && change.moved_to}
-              <div class="change-dates">
-                <span>{formatDate(change.moved_from)}</span>
-                <IconArrowRight size={15} stroke={1.8} aria-hidden="true" />
-                <span>{formatDate(change.moved_to)}</span>
-              </div>
-            {:else if change.moved_to}
-              <div class="change-dates">Added {formatDate(change.moved_to)}</div>
-            {/if}
-          </div>
-        </article>
+  <section>
+    <h3>What changed</h3>
+    <ul>
+      {#each changes as c (c.session_id ?? c.topic + c.why)}
+        <li class={c.type}>
+          <span class="topic">{c.topic}</span>
+          <span class="why">{c.why}</span>
+          {#if c.moved_from && c.moved_to}
+            <span class="move">{time(c.moved_from)} → {time(c.moved_to)}</span>
+          {:else if c.moved_to}
+            <span class="move">{time(c.moved_to)}</span>
+          {/if}
+        </li>
       {/each}
-    </div>
+    </ul>
   </section>
 {/if}
+
+<style>
+  section {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+  }
+
+  ul {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+  }
+
+  li {
+    font-size: 12px;
+    padding: 8px 0 8px 11px;
+    border-left: 2px solid var(--rule-strong);
+    margin-bottom: 6px;
+  }
+
+  li.added {
+    border-left-color: var(--review);
+  }
+
+  li.moved {
+    border-left-color: var(--learn);
+  }
+
+  li.blocked {
+    border-left-color: var(--flag);
+  }
+
+  .topic {
+    display: block;
+    font-weight: 600;
+  }
+
+  .why {
+    display: block;
+    color: var(--ink-soft);
+  }
+
+  .move {
+    display: block;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+  }
+</style>

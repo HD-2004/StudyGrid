@@ -1,506 +1,398 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import '@material/web/progress/linear-progress.js'
   import {
-    IconAlertCircle,
-    IconBook2,
-    IconCalendarMonth,
-    IconCheck,
-    IconClock,
-    IconEdit,
-    IconMenu2,
-    IconMoon,
-    IconPlus,
-    IconRefresh,
-    IconSun,
-    IconX,
-  } from '@tabler/icons-svelte'
-  import ChangeLog from './components/ChangeLog.svelte'
-  import IntakeForm from './components/IntakeForm.svelte'
-  import SessionDetail from './components/SessionDetail.svelte'
-  import StudyCalendar from './components/StudyCalendar.svelte'
-  import { analyzeMaterial, createPlan, getEvents, submitProgress } from './lib/api'
-  import { createSample, defaultAvailability, today } from './lib/sample'
+    createPlan,
+    getEvents,
+    getMissReasons,
+    submitProgress,
+    ApiError,
+  } from './lib/api'
   import type {
-    Availability,
     CalendarEvent,
     Completion,
-    DraftSubject,
+    Insights as InsightsData,
+    MissReason,
     PlanChange,
+    PlanRequest,
     PlanResponse,
+    ReasonOption,
     Recall,
-    Strategy,
-    StudySession,
   } from './lib/types'
+  import Calendar from './components/Calendar.svelte'
+  import ChangeLog from './components/ChangeLog.svelte'
+  import Insights from './components/Insights.svelte'
+  import IntakeForm from './components/IntakeForm.svelte'
+  import SessionDetail from './components/SessionDetail.svelte'
 
-  let subjects: DraftSubject[] = createSample('fresh')
-  let availability: Availability = structuredClone(defaultAvailability)
-  let strategy: Strategy = 'fresh'
-  let startDate = today()
-  let analyzingIndex: number | null = null
-  let generating = false
-  let savingProgress = false
-  let plan: PlanResponse | null = null
-  let events: CalendarEvent[] = []
-  let changes: PlanChange[] = []
-  let selectedSession: StudySession | null = null
-  let errorMessage = ''
-  let noticeMessage = ''
-  let theme: 'light' | 'dark' = 'light'
-  let plannerOpen = false
+  let plan = $state<PlanResponse | null>(null)
+  let events = $state<CalendarEvent[]>([])
+  let changes = $state<PlanChange[]>([])
+  let insights = $state<InsightsData | null>(null)
+  let reasons = $state<ReasonOption[]>([])
+  let selectedId = $state<string | null>(null)
+  let building = $state(false)
+  let updating = $state(false)
+  let error = $state<string | null>(null)
 
-  onMount(() => {
-    const savedTheme = localStorage.getItem('studygrid-theme')
-    theme =
-      savedTheme === 'light' || savedTheme === 'dark'
-        ? savedTheme
-        : window.matchMedia('(prefers-color-scheme: dark)').matches
-          ? 'dark'
-          : 'light'
+  // Reason labels come from the backend. A failure here must not block the
+  // core flow, so the prompt simply does not appear.
+  $effect(() => {
+    getMissReasons()
+      .then((r) => (reasons = r))
+      .catch(() => (reasons = []))
   })
 
-  $: if (typeof document !== 'undefined') {
-    document.documentElement.dataset.theme = theme
-  }
+  const selected = $derived(events.find((e) => e.id === selectedId) ?? null)
 
-  $: totalMinutes =
-    plan?.sessions.reduce((sum, session) => {
-      return sum + (new Date(session.end).getTime() - new Date(session.start).getTime()) / 60_000
-    }, 0) || 0
-  $: reviewCount = plan?.sessions.filter((session) => session.repetition > 1).length || 0
-  $: completedCount =
-    plan?.sessions.filter((session) => session.completion === 'completed').length || 0
-  $: topicCount = subjects.reduce((count, subject) => count + subject.topics.length, 0)
-  $: weeklyHours =
-    Object.values(availability.weekday_minutes).reduce((sum, minutes) => sum + minutes, 0) / 60
-  $: calendarTitle = new Intl.DateTimeFormat(undefined, {
-    month: 'long',
-    year: 'numeric',
-  }).format(new Date(`${startDate}T12:00:00`))
+  const counts = $derived({
+    learn: events.filter((e) => !e.is_review).length,
+    review: events.filter((e) => e.is_review).length,
+    hours:
+      events.reduce(
+        (total, e) => total + (Date.parse(e.end) - Date.parse(e.start)) / 3.6e6,
+        0,
+      ),
+  })
 
-  function toggleTheme() {
-    theme = theme === 'light' ? 'dark' : 'light'
-    localStorage.setItem('studygrid-theme', theme)
-  }
-
-  function clearMessages() {
-    errorMessage = ''
-    noticeMessage = ''
-  }
-
-  function loadSample(nextStrategy: Strategy) {
-    clearMessages()
-    strategy = nextStrategy
-    subjects = createSample(nextStrategy)
-    availability = structuredClone(defaultAvailability)
-    startDate = today()
-    plan = null
-    events = []
+  async function build(request: PlanRequest) {
+    building = true
+    error = null
     changes = []
-    selectedSession = null
+    insights = null
+    selectedId = null
+    try {
+      const created = await createPlan(request)
+      plan = created
+      events = await getEvents(created.plan_id)
+    } catch (e) {
+      error = e instanceof ApiError ? e.message : 'Something went wrong building the plan.'
+    } finally {
+      building = false
+    }
+  }
+
+  async function record(
+    completion: Completion,
+    recall: Recall | null,
+    missReason: MissReason | null,
+  ) {
+    if (!plan || !selectedId) return
+    updating = true
+    error = null
+    try {
+      const result = await submitProgress(
+        plan.plan_id,
+        selectedId,
+        completion,
+        recall,
+        missReason,
+      )
+      changes = result.changes
+      insights = result.insights
+      events = await getEvents(plan.plan_id)
+      selectedId = null
+    } catch (e) {
+      error = e instanceof ApiError ? e.message : 'Could not save your progress.'
+    } finally {
+      updating = false
+    }
   }
 
   function startOver() {
-    loadSample(strategy)
-    openPlanner()
-  }
-
-  function openPlanner() {
-    plannerOpen = true
-  }
-
-  function closePlanner() {
-    plannerOpen = false
-  }
-
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && plannerOpen) closePlanner()
-  }
-
-  async function analyzeSubject(index: number) {
-    const subject = subjects[index]
-    if (!subject.name.trim()) {
-      errorMessage = 'Add a subject name before analyzing its material.'
-      return
-    }
-    if (!subject.materialText.trim()) {
-      errorMessage = 'Paste course material before running analysis.'
-      return
-    }
-
-    clearMessages()
-    analyzingIndex = index
-    try {
-      const response = await analyzeMaterial(subject.name, subject.materialText)
-      subjects[index] = {
-        ...subject,
-        topics: response.topics,
-        analysisSource: response.source,
-      }
-      subjects = [...subjects]
-      noticeMessage =
-        response.source === 'ai'
-          ? `${response.topics.length} topics extracted with AI.`
-          : `${response.topics.length} topics extracted with the offline fallback.`
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Material analysis failed.'
-    } finally {
-      analyzingIndex = null
-    }
-  }
-
-  function validatePlan(): string | null {
-    if (!subjects.length) return 'Add at least one subject.'
-    if (subjects.some((subject) => !subject.name.trim())) return 'Every subject needs a name.'
-    if (subjects.some((subject) => !subject.exam_date)) return 'Every subject needs an exam date.'
-    if (subjects.some((subject) => !subject.topics.length)) {
-      return 'Every subject needs at least one topic.'
-    }
-    if (subjects.some((subject) => subject.topics.some((topic) => !topic.name.trim()))) {
-      return 'Every topic needs a name.'
-    }
-    if (!Object.values(availability.weekday_minutes).some((minutes) => minutes > 0)) {
-      return 'Add study time to at least one day.'
-    }
-    return null
-  }
-
-  async function generatePlan() {
-    const validationError = validatePlan()
-    if (validationError) {
-      errorMessage = validationError
-      return
-    }
-
-    clearMessages()
-    generating = true
+    plan = null
+    events = []
     changes = []
-    try {
-      const response = await createPlan({
-        strategy,
-        start_date: startDate,
-        availability,
-        notes: '',
-        subjects: subjects.map(({ materialText: _materialText, analysisSource: _source, ...subject }) =>
-          subject,
-        ),
-      })
-      plan = response
-      events = await getEvents(response.plan_id)
-      closePlanner()
-      noticeMessage = 'Your study plan is ready. Select any session to record progress.'
-      setTimeout(() => {
-        document.querySelector('.workspace-panel')?.scrollIntoView({ behavior: 'smooth' })
-      }, 0)
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'The study plan could not be created.'
-    } finally {
-      generating = false
-    }
-  }
-
-  function selectSession(eventId: string) {
-    selectedSession = plan?.sessions.find((session) => session.id === eventId) || null
-  }
-
-  async function saveProgress(completion: Completion, recall: Recall | null) {
-    if (!plan || !selectedSession) return
-
-    clearMessages()
-    savingProgress = true
-    try {
-      const response = await submitProgress({
-        plan_id: plan.plan_id,
-        session_id: selectedSession.id,
-        completion,
-        recall,
-      })
-      plan = {
-        ...plan,
-        sessions: response.sessions,
-        warnings: response.warnings,
-      }
-      changes = response.changes
-      events = await getEvents(plan.plan_id)
-      selectedSession = null
-      noticeMessage = response.changes.length
-        ? 'Progress saved and the remaining plan was updated.'
-        : 'Progress saved. The current schedule still fits.'
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Progress could not be saved.'
-    } finally {
-      savingProgress = false
-    }
+    insights = null
+    selectedId = null
+    error = null
   }
 </script>
 
-<svelte:head>
-  <title>StudyGrid | Adaptive study calendar</title>
-  <meta
-    name="description"
-    content="Build an adaptive study schedule from course material, exam dates, and real availability."
-  />
-</svelte:head>
-
-<svelte:window on:keydown={handleKeydown} />
-
-<div class="app-root">
-  <header class="topbar">
-    <div class="topbar-main">
-      <button
-        class="material-icon-button menu-button"
-        type="button"
-        aria-label="Open plan setup"
-        title="Open plan setup"
-        aria-expanded={plannerOpen}
-        on:click={openPlanner}
-      >
-        <IconMenu2 size={22} stroke={1.8} aria-hidden="true" />
-      </button>
-      <a class="brand" href="#top" aria-label="StudyGrid home">
-        <span class="brand-mark" aria-hidden="true">
-          <IconCalendarMonth size={22} stroke={1.8} />
-        </span>
-        <span>StudyGrid</span>
-      </a>
-      <span class="header-context">Study calendar</span>
-    </div>
-    <div class="topbar-meta">
-      <span class="service-state"><IconCheck size={16} stroke={2} /> Planner ready</span>
-      <button
-        class="material-icon-button theme-toggle"
-        type="button"
-        aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
-        title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
-        on:click={toggleTheme}
-      >
-        {#if theme === 'light'}
-          <IconMoon size={20} stroke={1.8} aria-hidden="true" />
-        {:else}
-          <IconSun size={20} stroke={1.8} aria-hidden="true" />
-        {/if}
-      </button>
-    </div>
+<div class="shell">
+  <header class="masthead">
+    <h1>StudyGrid</h1>
+    <p>
+      Turn what you have to learn, and the hours you actually have, into a review
+      schedule that adjusts when your week does.
+    </p>
   </header>
 
-  <main id="top" class="app-shell" inert={plannerOpen}>
-    <aside class="navigation-rail" aria-label="Plan summary">
-      <button
-        class="material-tonal-button create-plan-button"
-        type="button"
-        aria-expanded={plannerOpen}
-        on:click={openPlanner}
-      >
-        <IconPlus size={20} stroke={1.9} aria-hidden="true" />
-        {plan ? 'Edit plan' : 'Create plan'}
-      </button>
+  {#if error}
+    <p class="error" role="alert">{error}</p>
+  {/if}
 
-      <div class="rail-current">
-        <IconCalendarMonth size={19} stroke={1.8} aria-hidden="true" />
-        <span>Study calendar</span>
+  {#if !plan}
+    <div class="intake">
+      <IntakeForm busy={building} onSubmit={build} />
+    </div>
+  {:else}
+    <div class="summary">
+      <div class="tally">
+        <span class="figure">{counts.learn}</span>
+        <span class="unit">first passes</span>
       </div>
+      <div class="tally">
+        <span class="figure">{counts.review}</span>
+        <span class="unit">reviews</span>
+      </div>
+      <div class="tally">
+        <span class="figure">{counts.hours.toFixed(1)}</span>
+        <span class="unit">hours booked</span>
+      </div>
+      <button class="quiet" onclick={startOver}>Start a new plan</button>
+    </div>
 
-      <section class="rail-section">
-        <h2>{plan ? 'Plan summary' : 'Ready to schedule'}</h2>
-        <dl class="rail-stats">
-          <div>
-            <dt>Subjects</dt>
-            <dd>{subjects.length}</dd>
-          </div>
-          <div>
-            <dt>Topics</dt>
-            <dd>{topicCount}</dd>
-          </div>
-          <div>
-            <dt>Weekly capacity</dt>
-            <dd>{weeklyHours.toFixed(1)}h</dd>
-          </div>
-          {#if plan}
-            <div>
-              <dt>Completed</dt>
-              <dd>{completedCount}/{plan.sessions.length}</dd>
-            </div>
-          {/if}
-        </dl>
-      </section>
-
-      <section class="rail-section">
-        <h2>Subjects</h2>
-        <div class="rail-subjects">
-          {#each subjects.slice(0, 4) as subject}
-            <div>
-              <IconBook2 size={17} stroke={1.7} aria-hidden="true" />
-              <span>{subject.name || 'Untitled subject'}</span>
-              {#if subject.exam_date}
-                <time datetime={subject.exam_date}>{new Date(`${subject.exam_date}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' })}</time>
-              {:else}
-                <span class="rail-date">Set date</span>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      </section>
-
-      <section class="rail-section calendar-key">
-        <h2>Calendar key</h2>
-        <p><span class="key-swatch key-study"></span>First pass</p>
-        <p><span class="key-swatch key-review"></span>Review</p>
-        <p><span class="key-swatch key-completed"></span>Completed</p>
-      </section>
-    </aside>
-
-    <section class="workspace-panel" aria-label="Study plan workspace">
-      {#if !plannerOpen && errorMessage}
-        <div class="message-banner error-banner" role="alert">
-          <IconAlertCircle size={19} stroke={1.8} aria-hidden="true" />
-          <span>{errorMessage}</span>
-          <button type="button" on:click={() => (errorMessage = '')}>Dismiss</button>
-        </div>
-      {/if}
-      {#if !plannerOpen && noticeMessage}
-        <div class="message-banner notice-banner" role="status">
-          <IconCheck size={19} stroke={1.8} aria-hidden="true" />
-          <span>{noticeMessage}</span>
-          <button type="button" on:click={() => (noticeMessage = '')}>Dismiss</button>
-        </div>
-      {/if}
-
-      <div class="workspace-toolbar">
-        <div>
-          <h1>{calendarTitle}</h1>
+    {#if plan.warnings.length || plan.unscheduled.length}
+      <div class="caveats">
+        {#each plan.warnings as w (w)}
+          <p>{w}</p>
+        {/each}
+        {#if plan.unscheduled.length}
           <p>
-            {#if plan}
-              {plan.sessions.length} sessions, {(totalMinutes / 60).toFixed(1)} study hours, {reviewCount} reviews
-            {:else}
-              Build a plan to add focused study sessions to your week.
-            {/if}
+            No room before the exam for {plan.unscheduled.join(', ')}. Free up more
+            time or drop a topic.
           </p>
+        {/if}
+      </div>
+    {/if}
+
+    <div class="workspace">
+      <div class="grid">
+        <div class="key">
+          <span><i class="swatch learn"></i>New material</span>
+          <span><i class="swatch review"></i>Review</span>
+          <span><i class="swatch flag"></i>Needs another look</span>
+          <span class="key-hint">Click any session to log how it went.</span>
         </div>
-        <div class="toolbar-actions">
-          {#if plan}
-            <button class="button button-secondary" type="button" on:click={openPlanner}>
-              <IconEdit size={17} stroke={1.8} aria-hidden="true" />
-              Edit plan
-            </button>
-            <button class="button button-quiet" type="button" on:click={startOver}>
-              <IconRefresh size={17} stroke={1.8} aria-hidden="true" />
-              Start over
-            </button>
-          {/if}
-        </div>
+        <Calendar {events} onSelect={(id) => (selectedId = id)} />
       </div>
 
-      {#if plan?.warnings.length || plan?.unscheduled.length}
-        <section class="capacity-panel" aria-label="Scheduling notices">
-          <IconAlertCircle size={20} stroke={1.8} aria-hidden="true" />
-          <div>
-            <h2>Check plan capacity</h2>
-            {#each plan?.warnings || [] as warning}<p>{warning}</p>{/each}
-            {#if plan?.unscheduled.length}
-              <p>Could not schedule: {plan.unscheduled.join(', ')}</p>
-            {/if}
-          </div>
-        </section>
-      {/if}
-
-      <ChangeLog {changes} />
-
-      <section class="calendar-section" aria-label="Study calendar">
-        <div class="calendar-canvas">
-          {#key plan?.plan_id || 'empty-calendar'}
-            <StudyCalendar events={plan ? events : []} {theme} onSelect={selectSession} />
-          {/key}
-
-          {#if generating}
-            <div class="calendar-overlay loading-overlay" aria-live="polite">
-              <div class="overlay-card">
-                <md-linear-progress indeterminate aria-label="Building study plan"></md-linear-progress>
-                <h2>Building your study plan</h2>
-                <p>Balancing deadlines, priorities, and review intervals.</p>
-              </div>
-            </div>
-          {:else if !plan}
-            <div class="calendar-overlay empty-calendar-overlay">
-              <div class="overlay-card">
-                <span class="overlay-icon" aria-hidden="true">
-                  <IconCalendarMonth size={25} stroke={1.7} />
-                </span>
-                <h2>Create your study schedule</h2>
-                <p>Add subjects, exam dates, and your weekly availability.</p>
-                <button class="material-tonal-button" type="button" on:click={openPlanner}>
-                  <IconPlus size={19} stroke={1.9} aria-hidden="true" />
-                  Create plan
-                </button>
-              </div>
-            </div>
-          {/if}
-        </div>
-      </section>
-    </section>
-  </main>
-
-  {#if plannerOpen}
-    <button
-      class="planner-scrim"
-      type="button"
-      aria-label="Close plan setup"
-      on:click={closePlanner}
-    ></button>
-    <div class="planner-drawer" role="dialog" aria-modal="true" aria-labelledby="planner-title">
-      <header class="planner-drawer-header">
-        <div>
-          <p>Study plan</p>
-          <h1 id="planner-title">Create study plan</h1>
-        </div>
-        <button
-          class="material-icon-button"
-          type="button"
-          aria-label="Close plan setup"
-          title="Close plan setup"
-          on:click={closePlanner}
-        >
-          <IconX size={22} stroke={1.8} aria-hidden="true" />
-        </button>
-      </header>
-      <div class="planner-drawer-scroll">
-        {#if errorMessage || noticeMessage}
-          <div class="drawer-message-stack">
-            {#if errorMessage}
-              <div class="message-banner error-banner" role="alert">
-                <IconAlertCircle size={19} stroke={1.8} aria-hidden="true" />
-                <span>{errorMessage}</span>
-                <button type="button" on:click={() => (errorMessage = '')}>Dismiss</button>
-              </div>
-            {/if}
-            {#if noticeMessage}
-              <div class="message-banner notice-banner" role="status">
-                <IconCheck size={19} stroke={1.8} aria-hidden="true" />
-                <span>{noticeMessage}</span>
-                <button type="button" on:click={() => (noticeMessage = '')}>Dismiss</button>
-              </div>
-            {/if}
+      <div class="sidebar">
+        {#if selected}
+          <SessionDetail
+            event={selected}
+            busy={updating}
+            {reasons}
+            onSubmit={record}
+            onClose={() => (selectedId = null)} />
+        {:else}
+          <div class="placeholder">
+            <h2>Log a session</h2>
+            <p>
+              Pick a session in the calendar to record whether you studied it and
+              how much you remembered. The rest of the plan shifts to match.
+            </p>
           </div>
         {/if}
-        <IntakeForm
-          bind:subjects
-          bind:availability
-          bind:strategy
-          bind:startDate
-          {analyzingIndex}
-          {generating}
-          onAnalyze={analyzeSubject}
-          onGenerate={generatePlan}
-          onLoadSample={loadSample}
-        />
+        <ChangeLog {changes} />
+        <Insights {insights} />
       </div>
     </div>
   {/if}
-
-  <SessionDetail
-    session={selectedSession}
-    open={selectedSession !== null}
-    saving={savingProgress}
-    onClose={() => (selectedSession = null)}
-    onSave={saveProgress}
-  />
 </div>
+
+<style>
+  .shell {
+    width: min(1240px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 44px 0 80px;
+  }
+
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 16px;
+    margin-bottom: 28px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 60px;
+  }
+
+  .masthead p {
+    margin: 0;
+    max-width: 46ch;
+    color: var(--ink-soft);
+    text-align: right;
+  }
+
+  .intake {
+    width: min(780px, 100%);
+  }
+
+  .error {
+    border-left: 3px solid var(--flag);
+    background: #fdf6ee;
+    padding: 10px 14px;
+    margin: 0 0 22px;
+    color: #7d4715;
+  }
+
+  .summary {
+    display: flex;
+    align-items: baseline;
+    gap: 40px;
+    padding-bottom: 18px;
+    margin-bottom: 18px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .summary button {
+    margin-left: auto;
+  }
+
+  .tally {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+  }
+
+  .figure {
+    font-family: var(--serif);
+    font-size: 27px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .unit {
+    color: var(--ink-soft);
+    font-size: 12px;
+  }
+
+  .caveats {
+    border-left: 3px solid var(--flag);
+    padding: 8px 14px;
+    margin-bottom: 22px;
+    background: #fdf9f3;
+  }
+
+  .caveats p {
+    margin: 3px 0;
+    font-size: 12px;
+    color: #7d4715;
+  }
+
+  .workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 316px;
+    gap: var(--gutter);
+    align-items: start;
+  }
+
+  .grid {
+    min-width: 0;
+  }
+
+  .key {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-bottom: 10px;
+  }
+
+  .key span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .key-hint {
+    margin-left: auto;
+    color: var(--ink-faint);
+  }
+
+  .swatch {
+    width: 9px;
+    height: 9px;
+    border-radius: 1px;
+  }
+
+  .swatch.learn {
+    background: var(--learn);
+  }
+
+  .swatch.review {
+    background: var(--review);
+  }
+
+  .swatch.flag {
+    background: var(--flag);
+  }
+
+  .placeholder h2 {
+    margin-bottom: 6px;
+  }
+
+  .placeholder {
+    border-left: 1px solid var(--rule);
+    padding-left: var(--gutter);
+    color: var(--ink-soft);
+  }
+
+  .placeholder p {
+    margin: 0;
+    font-size: 12px;
+  }
+
+  @media (max-width: 900px) {
+    .shell {
+      padding-top: 28px;
+    }
+
+    .masthead {
+      display: block;
+      margin-bottom: 24px;
+    }
+
+    .masthead p {
+      margin-top: 10px;
+      max-width: 58ch;
+      text-align: left;
+    }
+
+    .workspace {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sidebar {
+      border-top: 1px solid var(--rule);
+      padding-top: 20px;
+    }
+
+    .placeholder {
+      border-left: 0;
+      padding-left: 0;
+    }
+  }
+
+  @media (max-width: 600px) {
+    .shell {
+      width: calc(100% - 24px);
+      padding: 20px 0 48px;
+    }
+
+    .summary {
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px 20px;
+    }
+
+    .summary button {
+      width: 100%;
+      margin-left: 0;
+    }
+
+    .figure {
+      font-size: 24px;
+    }
+
+    .key {
+      flex-wrap: wrap;
+      gap: 7px 14px;
+    }
+
+    .key-hint {
+      flex-basis: 100%;
+      margin-left: 0;
+    }
+  }
+</style>

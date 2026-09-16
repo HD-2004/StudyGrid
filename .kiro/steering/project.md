@@ -53,6 +53,16 @@ the same calendar hand out the same slot twice (this bug already happened once).
 Any AI call needs a deterministic fallback. A dead API key must not break the
 demo.
 
+## Insights (8.3)
+
+`plan.history` is an append-only log of logged outcomes. It exists because
+rescheduling a missed session rewrites that session in place, which would erase
+the fact it was ever missed. Aggregation must read `history`, never `sessions`.
+
+`app/insights.py` withholds pattern claims below `MIN_FOR_PATTERNS` logged
+sessions. Do not lower that to make a demo look richer; presenting noise as
+insight undermines the parts of the plan that are real.
+
 ## Layer separation
 
 ```

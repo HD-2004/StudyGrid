@@ -51,6 +51,36 @@ RECALL_MULTIPLIER: dict[Recall, float] = {
 }
 
 
+class MissReason(str, Enum):
+    """HACKATHON.md 8.3: why a session did not happen.
+
+    Deliberately a short fixed list. Free text cannot be aggregated into
+    patterns, and a student reporting a missed session wants one tap, not an
+    essay. `other` exists so the list never blocks recording the miss.
+    """
+
+    club = "club"
+    exercise = "exercise"
+    social = "social"
+    rest = "rest"
+    mood = "mood"
+    emergency = "emergency"
+    other = "other"
+
+
+# Display labels, kept beside the enum so the API can serve them and the UI
+# never hardcodes a parallel list that drifts out of sync.
+MISS_REASON_LABELS: dict[MissReason, str] = {
+    MissReason.club: "Club meeting",
+    MissReason.exercise: "Exercise",
+    MissReason.social: "Social activity",
+    MissReason.rest: "Rest",
+    MissReason.mood: "Mood",
+    MissReason.emergency: "Emergency",
+    MissReason.other: "Something else",
+}
+
+
 class Strategy(str, Enum):
     """HACKATHON.md section 7, the three entry points."""
 
@@ -148,6 +178,9 @@ class StudySession(BaseModel):
     end: datetime
     completion: Completion = Completion.planned
     recall: Recall | None = None
+    # Why the session was missed (8.3). Only meaningful when the session was
+    # partially or not completed.
+    miss_reason: MissReason | None = None
     # Which pass over the material: 1 = first study, 2+ = review.
     repetition: int = Field(default=1, ge=1)
     rationale: str = ""
@@ -175,6 +208,10 @@ class PlanRequest(BaseModel):
 
 class StudyPlan(BaseModel):
     sessions: list[StudySession] = Field(default_factory=list)
+    # Append-only record of every logged outcome (8.3). Needed because a missed
+    # session is rewritten in place when it is rescheduled, which would
+    # otherwise erase the fact that it was ever missed.
+    history: list[StudySession] = Field(default_factory=list)
     summary: str = ""
     warnings: list[str] = Field(default_factory=list)
     # Set when the calendar cannot fit everything, so the UI can say so plainly
@@ -201,3 +238,38 @@ class PlanChange(BaseModel):
     session_id: str | None = None
     moved_from: datetime | None = None
     moved_to: datetime | None = None
+
+
+class ReasonCount(BaseModel):
+    """How often one reason came up (8.3)."""
+
+    reason: MissReason
+    label: str
+    count: int
+    minutes_lost: int
+
+
+class Insights(BaseModel):
+    """Aggregated time-use patterns (8.3).
+
+    Reports only what the data supports. With a handful of sessions logged there
+    is no real pattern to find, so `confident` stays false and the UI should say
+    so rather than presenting noise as insight.
+    """
+
+    sessions_logged: int = 0
+    completed: int = 0
+    missed: int = 0
+    partial: int = 0
+    minutes_studied: int = 0
+    minutes_lost: int = 0
+    reasons: list[ReasonCount] = Field(default_factory=list)
+    # Weekdays where sessions are missed most often, as weekday indexes.
+    weak_weekdays: list[int] = Field(default_factory=list)
+    recall_mix: dict[str, int] = Field(default_factory=dict)
+    observations: list[str] = Field(default_factory=list)
+    confident: bool = False
+
+    @property
+    def completion_rate(self) -> float:
+        return self.completed / self.sessions_logged if self.sessions_logged else 0.0

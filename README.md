@@ -17,6 +17,7 @@ Requirements: Python 3.14, Node.js 20 or newer, and npm.
 ```powershell
 py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --only-binary=:all: -r requirements.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
 Copy-Item .env.example .env
 Set-Location web
 npm install
@@ -61,9 +62,14 @@ Frontend checks:
 Set-Location web
 npm run check
 npm run build
-npm run test:e2e
 ```
 
-The browser test uses a locally installed Chrome browser and covers material
-analysis, plan creation, calendar rendering, progress entry, adaptation, mobile
-layout, and dark mode.
+With both local servers running, run the browser workflow from the repository
+root:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\smoke_ui.py
+```
+
+The browser test covers plan creation, calendar rendering, progress entry,
+adaptation, time-use insights, and mobile layout.

@@ -108,6 +108,12 @@ StudyGrid schedules future review sessions based on spaced repetition principles
 
 When the student's actual behavior differs from the original schedule, StudyGrid recalculates the remaining plan.
 
+### 6.5 Time-Use Insights
+
+When a session is not completed, StudyGrid captures a short reason and
+aggregates those reasons over time, so students can see where their study time
+actually goes. Detailed behavior is described in 8.3.
+
 ### 6.6 Progress Tracking
 
 Students can mark sessions/topics as:
@@ -130,7 +136,7 @@ StudyGrid supports different student situations rather than assuming every stude
 
 The product can be understood through three core operations:
 CREATE 
-Create a study plan from scratch 
+Create a study plan from inputs from users 
     ↓
 OPTIMIZE 
 Improve an existing plan for a new goal 
@@ -156,8 +162,14 @@ Goal: Generate a focused exam-preparation plan that maximizes learning within th
 ## 8. Product Logic & User Scenarios
 
 ### 8.1 Initial Study Plan Generation
-#### Trigger:
-Student submits their study information.
+
+#### Situation:
+Students create study plan. 
+
+Example: 
+- Students create study plan for new semester 
+- Students half way through the semester want to optimize current schedule 
+- Students preparing for the examination 
 
 #### Inputs:
 
@@ -167,7 +179,7 @@ Student submits their study information.
 - Subject priority
 - Existing schedule / constraints
 
-#### Expected behavior:
+#### What StudyGrid do: 
 StudyGrid creates a schedule containing:
 
 - Initial learning sessions
@@ -175,6 +187,45 @@ StudyGrid creates a schedule containing:
 - Topic allocation
 - Estimated study duration
 
+### 8.2 Respond to Changes
+
+#### Situation: 
+Students don't finished studying task according to plan 
+
+#### Examples:
+
+- Missed study session
+- Student progresses faster or slower than expected
+
+#### What StudyGrid do: 
+- Mark the session as incomplete.
+- Identify the unfinished topic.
+- Check remaining available study time.
+- Check the upcoming exam deadline.
+- Reassess the topic's priority.
+- Find appropriate future time slots.
+- Reschedule the unfinished work.
+- Adjust affected review sessions if necessary.
+
+#### Output:
+An updated plan that fits the student's current situation.
+
+### 8.3 Understand Where Study Time Goes
+
+#### Situation:
+When a study session is not completed, StudyGrid asks for a quick reason, such as: Club meeting · Exercise · Social activity · Rest · Mood · Emergency
+
+#### What StudyGrid do:
+Aggregates this information over time to identify patterns in how the student actually uses their time.
+
+#### Output:
+Weekly/monthly insight dashboard showing:
+
+- Where their time goes
+- What activities frequently affect study time
+- Changes in study habits
+- Potential areas for better balance
+- Suggestions for the coming weeks
 
 ## 9. AI Component
 

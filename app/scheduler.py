@@ -21,6 +21,7 @@ from .models import (
     ChangeType,
     Completion,
     Difficulty,
+    MissReason,
     PlanChange,
     PlanRequest,
     Recall,
@@ -302,6 +303,7 @@ def record_progress(
     recall: Recall | None,
     allocator: TimeAllocator,
     exam_dates: dict[str, date],
+    miss_reason: MissReason | None = None,
 ) -> tuple[StudyPlan, list[PlanChange]]:
     """Apply progress feedback and adapt the remaining plan (6.4, 6.6).
 
@@ -314,6 +316,16 @@ def record_progress(
     changes: list[PlanChange] = []
     session.completion = completion
     session.recall = recall
+    # Only meaningful for sessions that did not fully happen (8.3).
+    session.miss_reason = (
+        miss_reason
+        if completion in (Completion.partial, Completion.not_completed)
+        else None
+    )
+
+    # Snapshot the outcome before any rescheduling rewrites the session, so the
+    # insight report keeps a complete record (8.3).
+    plan.history.append(session.model_copy())
 
     deadline = exam_dates.get(session.subject)
     if deadline is None:
@@ -341,12 +353,15 @@ def record_progress(
             return plan, changes
 
         original_start = session.start
+        # The replacement is a fresh attempt with no progress data. The miss
+        # itself is preserved in plan.history above.
         moved = session.model_copy(
             update={
                 "start": slot[0],
                 "end": slot[1],
                 "completion": Completion.planned,
                 "recall": None,
+                "miss_reason": None,
                 "rationale": "Rescheduled after a missed session",
             }
         )

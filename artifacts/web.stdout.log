@@ -1,0 +1,14 @@
+
+> studygrid-web@0.1.0 dev
+> vite --host 127.0.0.1 --port 5173
+
+
+  [32m[1mVITE[22m v6.0.7[39m  [2mready in [0m[1m672[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+[2m[32m  ➜[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m2:47:23 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mindex.html[22m
+[2m2:47:23 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2mindex.html[22m
+[2m2:47:24 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.svelte?svelte&type=style&lang.css[22m
+[2m2:47:25 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/IntakeForm.svelte, /src/components/IntakeForm.svelte?svelte&type=style&lang.css[22m
+[2m2:47:25 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Calendar.svelte?svelte&type=style&lang.css[22m

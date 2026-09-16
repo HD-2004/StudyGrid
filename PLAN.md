@@ -58,6 +58,18 @@ mocked and swapped for real calls with no component changes.
 
 Checkpoint: end-to-end demo in a browser.
 
+## Phase 3 — Time-use insights (done, HACKATHON.md 8.3)
+
+- [x] `MissReason` enum with labels served from the backend
+- [x] Miss reason captured on partial and missed sessions
+- [x] `plan.history` append-only outcome log, so rescheduling cannot erase a miss
+- [x] `app/insights.py` aggregation: counts, reason ranking, weak weekdays
+- [x] Withholds pattern claims below 5 logged sessions
+- [x] `GET /api/plan/{id}/insights` and `GET /api/miss-reasons`
+- [x] Reason chips in session detail, shown only when time was lost
+- [x] Insights panel with lost-time attribution
+- [x] Tests: `scripts/smoke_insights.py`, plus browser coverage in `smoke_ui.py`
+
 ## Phase 4 — Demo polish (prepared, next)
 
 - [x] Keep the calendar interactive on first load; setup opens only on request
@@ -85,3 +97,8 @@ works without all four.
 ## Open decisions
 
 1. Sections 10, 11, and 12 of HACKATHON.md are empty and are judged
+2. The earlier Material 3 frontend (dark mode, mobile, setup drawer) was
+   overwritten. `web/tests/app.spec.ts` still targets it and will fail against
+   the current UI. Either restore that UI from editor history or rewrite the
+   spec to match what exists.
+3. Nothing is committed to git yet.

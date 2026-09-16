@@ -9,7 +9,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..ai import MaterialAnalyzer, build_analyzer_from_env
-from ..models import PlanRequest
+from ..insights import build_insights
+from ..models import Insights, MISS_REASON_LABELS, PlanRequest
 from ..scheduler import build_plan, record_progress
 from ..store import InMemoryRepository, PlanRecord, PlanRepository
 from .schemas import (
@@ -19,6 +20,7 @@ from .schemas import (
     PlanResponse,
     ProgressRequest,
     ProgressResponse,
+    ReasonOption,
 )
 
 router = APIRouter(prefix="/api")
@@ -110,11 +112,33 @@ def submit_progress(
         request.recall,
         record.allocator,
         record.exam_dates,
+        miss_reason=request.miss_reason,
     )
 
     record.plan = plan
     repo.save(record)
 
     return ProgressResponse(
-        sessions=plan.sessions, changes=changes, warnings=plan.warnings
+        sessions=plan.sessions,
+        changes=changes,
+        warnings=plan.warnings,
+        insights=build_insights(plan.history),
     )
+
+
+@router.get("/plan/{plan_id}/insights", response_model=Insights)
+def get_insights(plan_id: str, repo: PlanRepository = Depends(get_repo)) -> Insights:
+    """Where study time actually goes (HACKATHON.md 8.3)."""
+    record = repo.load(plan_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    return build_insights(record.plan.history)
+
+
+@router.get("/miss-reasons", response_model=list[ReasonOption])
+def get_miss_reasons() -> list[ReasonOption]:
+    """Reason options for the missed-session prompt (8.3)."""
+    return [
+        ReasonOption(value=reason, label=label)
+        for reason, label in MISS_REASON_LABELS.items()
+    ]

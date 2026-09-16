@@ -1,135 +1,198 @@
 <script lang="ts">
-  import { IconBook, IconBrain, IconCalendarClock, IconX } from '@tabler/icons-svelte'
-  import type { Completion, Recall, StudySession } from '../lib/types'
+  // Progress entry (HACKATHON.md 6.6) plus miss-reason capture (8.3).
+  // Two axes for completion and recall, because "I finished it but remember
+  // nothing" is the case that should trigger an earlier review.
+  import type { CalendarEvent, Completion, MissReason, Recall, ReasonOption } from '../lib/types'
 
-  export let session: StudySession | null = null
-  export let open = false
-  export let saving = false
-  export let onClose: () => void
-  export let onSave: (completion: Completion, recall: Recall | null) => void
+  let {
+    event,
+    busy,
+    reasons,
+    onSubmit,
+    onClose,
+  }: {
+    event: CalendarEvent
+    busy: boolean
+    reasons: ReasonOption[]
+    onSubmit: (completion: Completion, recall: Recall | null, missReason: MissReason | null) => void
+    onClose: () => void
+  } = $props()
 
-  let dialog: HTMLDialogElement
-  let completion: Completion = 'completed'
-  let recall: Recall | null = 'well'
+  let completion = $state<Completion>('completed')
+  let recall = $state<Recall>('medium')
+  let missReason = $state<MissReason | null>(null)
 
-  $: if (open && session) {
-    completion = session.completion === 'planned' ? 'completed' : session.completion
-    recall = session.recall || 'well'
-  }
+  // Recall only means something if the session actually happened.
+  const asksRecall = $derived(completion === 'completed' || completion === 'partial')
+  // A reason only makes sense when time was lost (8.3).
+  const asksReason = $derived(completion === 'partial' || completion === 'not_completed')
 
-  $: if (dialog) {
-    if (open && !dialog.open) dialog.showModal()
-    if (!open && dialog.open) dialog.close()
-  }
-
-  function chooseCompletion(value: Completion) {
-    completion = value
-    if (value === 'not_completed') recall = null
-    if (value !== 'not_completed' && recall === null) recall = 'well'
-  }
-
-  function submit() {
-    onSave(completion, completion === 'not_completed' ? null : recall)
+  function when(iso: string): string {
+    return new Date(iso).toLocaleString(undefined, {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
   }
 </script>
 
-<dialog
-  class="session-dialog"
-  bind:this={dialog}
-  on:close={() => open && onClose()}
-  on:cancel={(event) => {
-    event.preventDefault()
-    onClose()
-  }}
->
-  {#if session}
-    <div class="dialog-shell">
-      <header class="dialog-header">
-        <div class="session-kind">
-          {session.repetition > 1 ? `Review ${session.repetition - 1}` : 'First pass'}
-        </div>
-        <button class="icon-button" type="button" aria-label="Close session details" on:click={onClose}>
-          <IconX size={20} stroke={1.8} aria-hidden="true" />
-        </button>
-      </header>
+<aside>
+  <header>
+    <div>
+      <h2>{event.topic}</h2>
+      <p class="meta">{event.subject}</p>
+    </div>
+    <button class="link" onclick={onClose}>Close</button>
+  </header>
 
-      <div class="dialog-title">
-        <p>{session.subject}</p>
-        <h2>{session.topic}</h2>
-      </div>
+  <dl>
+    <dt>Scheduled</dt>
+    <dd>{when(event.start)}</dd>
+    <dt>Pass</dt>
+    <dd>{event.is_review ? `Review ${event.repetition - 1}` : 'First study'}</dd>
+    <dt>Why now</dt>
+    <dd>{event.rationale}</dd>
+  </dl>
 
-      <div class="session-facts">
-        <div>
-          <IconCalendarClock size={18} stroke={1.8} aria-hidden="true" />
-          <span>{new Date(session.start).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span>
-        </div>
-        <div>
-          <IconBook size={18} stroke={1.8} aria-hidden="true" />
-          <span>{session.rationale}</span>
-        </div>
-      </div>
+  <div class="field">
+    <label for="completion">Did you study it?</label>
+    <select id="completion" bind:value={completion}>
+      <option value="completed">Finished the session</option>
+      <option value="partial">Got partway</option>
+      <option value="not_completed">Did not study</option>
+    </select>
+  </div>
 
-      <form on:submit|preventDefault={submit}>
-        <fieldset>
-          <legend>How did this session go?</legend>
-          <div class="choice-grid completion-grid">
-            <button
-              class:active={completion === 'completed'}
-              type="button"
-              on:click={() => chooseCompletion('completed')}
-            >
-              Completed
-            </button>
-            <button
-              class:active={completion === 'partial'}
-              type="button"
-              on:click={() => chooseCompletion('partial')}
-            >
-              Partially done
-            </button>
-            <button
-              class:active={completion === 'not_completed'}
-              type="button"
-              on:click={() => chooseCompletion('not_completed')}
-            >
-              Missed
-            </button>
-          </div>
-        </fieldset>
-
-        {#if completion !== 'not_completed'}
-          <fieldset>
-            <legend>
-              <IconBrain size={18} stroke={1.8} aria-hidden="true" />
-              How much could you recall?
-            </legend>
-            <div class="choice-grid recall-grid">
-              <label class:active={recall === 'well'}>
-                <input type="radio" value="well" bind:group={recall} />
-                <span>Mostly</span>
-                <small>Confident recall</small>
-              </label>
-              <label class:active={recall === 'medium'}>
-                <input type="radio" value="medium" bind:group={recall} />
-                <span>About half</span>
-                <small>Needs reinforcement</small>
-              </label>
-              <label class:active={recall === 'poor'}>
-                <input type="radio" value="poor" bind:group={recall} />
-                <span>Very little</span>
-                <small>Add an earlier review</small>
-              </label>
-            </div>
-          </fieldset>
-        {/if}
-
-        <div class="dialog-actions">
-          <button class="button button-quiet" type="button" on:click={onClose}>Cancel</button>
-          <button class="button button-primary" type="submit" disabled={saving}>
-            {saving ? 'Updating plan...' : 'Save progress'}
-          </button>
-        </div>
-      </form>
+  {#if asksRecall}
+    <div class="field">
+      <label for="recall">How much could you recall?</label>
+      <select id="recall" bind:value={recall}>
+        <option value="well">Most of it</option>
+        <option value="medium">About half</option>
+        <option value="poor">Very little</option>
+      </select>
     </div>
   {/if}
-</dialog>
+
+  {#if asksReason}
+    <div class="field">
+      <span class="field-label" id="reason-label">What came up instead?</span>
+      <div class="reasons" role="group" aria-labelledby="reason-label">
+        {#each reasons as option (option.value)}
+          <button
+            type="button"
+            class="chip"
+            class:selected={missReason === option.value}
+            aria-pressed={missReason === option.value}
+            onclick={() => (missReason = missReason === option.value ? null : option.value)}>
+            {option.label}
+          </button>
+        {/each}
+      </div>
+      <p class="aside-note">Optional. Helps spot what keeps eating your study time.</p>
+    </div>
+  {/if}
+
+  <button
+    disabled={busy}
+    onclick={() =>
+      onSubmit(completion, asksRecall ? recall : null, asksReason ? missReason : null)}>
+    {busy ? 'Updating plan…' : 'Save and update plan'}
+  </button>
+
+  <p class="note">
+    {#if completion === 'not_completed'}
+      This session moves to your next free slot.
+    {:else if asksRecall && recall === 'poor'}
+      An extra review gets added soon after today.
+    {:else if asksRecall && recall === 'medium'}
+      A review gets added at a shorter interval.
+    {:else}
+      Your remaining reviews stay as planned.
+    {/if}
+  </p>
+</aside>
+
+<style>
+  aside {
+    border-left: 1px solid var(--rule);
+    padding-left: var(--gutter);
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .meta {
+    margin: 2px 0 0;
+    color: var(--ink-soft);
+    font-size: 12px;
+  }
+
+  dl {
+    margin: 0 0 20px;
+    display: grid;
+    grid-template-columns: 74px 1fr;
+    gap: 5px 12px;
+    font-size: 12px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  dt {
+    color: var(--ink-faint);
+  }
+
+  dd {
+    margin: 0;
+  }
+
+  .field {
+    margin-bottom: 14px;
+  }
+
+  .field-label {
+    display: block;
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-bottom: 5px;
+  }
+
+  .reasons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .chip {
+    background: transparent;
+    border: 1px solid var(--rule-strong);
+    color: var(--ink-soft);
+    padding: 4px 9px;
+    font-size: 12px;
+    border-radius: 2px;
+  }
+
+  .chip:hover {
+    background: #f0ede6;
+  }
+
+  .chip.selected {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--paper);
+  }
+
+  .aside-note,
+  .note {
+    font-size: 12px;
+    color: var(--ink-soft);
+    margin: 8px 0 0;
+  }
+</style>

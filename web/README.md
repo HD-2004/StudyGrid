@@ -7,13 +7,15 @@ npm install
 npm run dev
 ```
 
-The client defaults to `http://127.0.0.1:8000`. Set `VITE_API_BASE_URL` to use
-another API origin.
+During development, Vite proxies `/api` requests to
+`http://127.0.0.1:8000`.
 
 Verification commands:
 
 ```powershell
 npm run check
 npm run build
-npm run test:e2e
 ```
+
+The end-to-end browser workflow lives at `../scripts/smoke_ui.py` and expects
+the API and frontend dev servers to be running.

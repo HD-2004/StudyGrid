@@ -1,92 +1,103 @@
+// The only module that talks HTTP. Components import from here, never fetch
+// directly, so swapping transport or adding auth touches one file.
+
 import type {
   AnalyzeResponse,
   CalendarEvent,
   Completion,
+  Insights,
+  MissReason,
   PlanRequest,
   PlanResponse,
   ProgressResponse,
+  ReasonOption,
   Recall,
 } from './types'
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(
-  /\/$/,
-  '',
-)
+const BASE = '/api' // proxied to the backend by vite.config.ts
 
-export class ApiError extends Error {
-  status: number
-
-  constructor(message: string, status: number) {
+class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
     super(message)
     this.name = 'ApiError'
-    this.status = status
   }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let response: Response
+  let res: Response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    res = await fetch(`${BASE}${path}`, {
       ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...init?.headers,
-      },
+      headers: { 'Content-Type': 'application/json', ...init?.headers },
     })
   } catch {
-    throw new ApiError(
-      'StudyGrid could not reach the planning service. Check that the API is running on port 8000.',
-      0,
-    )
+    // Distinguish "backend is not running" from "backend said no", because the
+    // fixes are different and the user needs to know which.
+    throw new ApiError('Cannot reach the backend. Is the server running?', 0)
   }
 
-  if (!response.ok) {
-    let message = `Request failed with status ${response.status}.`
+  if (!res.ok) {
+    let detail = res.statusText
     try {
-      const body = (await response.json()) as { detail?: string | Array<{ msg?: string }> }
-      if (typeof body.detail === 'string') message = body.detail
-      if (Array.isArray(body.detail)) {
-        message = body.detail.map((item) => item.msg).filter(Boolean).join(' ')
-      }
+      const body = await res.json()
+      if (typeof body?.detail === 'string') detail = body.detail
     } catch {
-      // Keep the status-based message when the server did not return JSON.
+      // non-JSON error body; keep the status text
     }
-    throw new ApiError(message, response.status)
+    throw new ApiError(detail, res.status)
   }
 
-  return (await response.json()) as T
+  return res.json() as Promise<T>
 }
 
+export function createPlan(req: PlanRequest): Promise<PlanResponse> {
+  return request<PlanResponse>('/plan', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
+export function getEvents(planId: string): Promise<CalendarEvent[]> {
+  return request<CalendarEvent[]>(`/plan/${planId}/events`)
+}
+
+export function submitProgress(
+  planId: string,
+  sessionId: string,
+  completion: Completion,
+  recall: Recall | null,
+  missReason: MissReason | null,
+): Promise<ProgressResponse> {
+  return request<ProgressResponse>('/progress', {
+    method: 'POST',
+    body: JSON.stringify({
+      plan_id: planId,
+      session_id: sessionId,
+      completion,
+      recall,
+      miss_reason: missReason,
+    }),
+  })
+}
+
+/** Reason options come from the backend so the UI cannot drift out of sync. */
+export function getMissReasons(): Promise<ReasonOption[]> {
+  return request<ReasonOption[]>('/miss-reasons')
+}
+
+export function getInsights(planId: string): Promise<Insights> {
+  return request<Insights>(`/plan/${planId}/insights`)
+}
+
+/** Extract topics from pasted course material (6.1). */
 export function analyzeMaterial(subject: string, text: string): Promise<AnalyzeResponse> {
-  return request<AnalyzeResponse>('/api/analyze', {
+  return request<AnalyzeResponse>('/analyze', {
     method: 'POST',
     body: JSON.stringify({ subject, text }),
   })
 }
 
-export function createPlan(payload: PlanRequest): Promise<PlanResponse> {
-  return request<PlanResponse>('/api/plan', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function getEvents(planId: string): Promise<CalendarEvent[]> {
-  return request<CalendarEvent[]>(`/api/plan/${planId}/events`)
-}
-
-export function submitProgress(payload: {
-  plan_id: string
-  session_id: string
-  completion: Completion
-  recall: Recall | null
-}): Promise<ProgressResponse> {
-  return request<ProgressResponse>('/api/progress', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-export function getApiBaseUrl(): string {
-  return API_BASE_URL
-}
+export { ApiError }

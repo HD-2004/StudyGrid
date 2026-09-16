@@ -1,46 +1,84 @@
+// Mirrors the backend contract in ARCHITECTURE.md. Keep in sync with
+// app/api/schemas.py and app/models.py.
+
 export type Difficulty = 'easy' | 'medium' | 'hard'
 export type Completion = 'planned' | 'completed' | 'partial' | 'not_completed'
 export type Recall = 'well' | 'medium' | 'poor'
 export type Strategy = 'fresh' | 'remaining' | 'exam_rush'
-export type AnalysisSource = 'ai' | 'fallback'
+export type ChangeType = 'moved' | 'added' | 'blocked'
+export type MissReason =
+  | 'club'
+  | 'exercise'
+  | 'social'
+  | 'rest'
+  | 'mood'
+  | 'emergency'
+  | 'other'
+
+export interface ReasonOption {
+  value: MissReason
+  label: string
+}
+
+export interface ReasonCount {
+  reason: MissReason
+  label: string
+  count: number
+  minutes_lost: number
+}
+
+/** Time-use aggregation (HACKATHON.md 8.3). */
+export interface Insights {
+  sessions_logged: number
+  completed: number
+  missed: number
+  partial: number
+  minutes_studied: number
+  minutes_lost: number
+  reasons: ReasonCount[]
+  weak_weekdays: number[]
+  recall_mix: Record<string, number>
+  observations: string[]
+  confident: boolean
+}
 
 export interface Topic {
   name: string
   difficulty: Difficulty
   estimated_minutes: number
-  already_studied: boolean
-  depends_on: string[]
+  already_studied?: boolean
+  depends_on?: string[]
 }
 
 export interface Subject {
   name: string
-  exam_date: string
+  exam_date: string // YYYY-MM-DD
   topics: Topic[]
   priority: number
 }
 
 export interface BusyBlock {
-  weekday: number
-  start: string
+  weekday: number // 0 = Monday
+  start: string // HH:MM:SS
   end: string
   label: string
 }
 
 export interface Availability {
-  weekday_minutes: Record<number, number>
-  earliest: string
-  latest: string
+  weekday_minutes: Record<string, number>
+  earliest?: string
+  latest?: string
   session_length_minutes: number
-  break_minutes: number
+  break_minutes?: number
   busy: BusyBlock[]
 }
 
 export interface PlanRequest {
   subjects: Subject[]
   availability: Availability
-  start_date: string
+  start_date?: string
   strategy: Strategy
-  notes: string
+  notes?: string
 }
 
 export interface StudySession {
@@ -51,6 +89,7 @@ export interface StudySession {
   end: string
   completion: Completion
   recall: Recall | null
+  miss_reason: MissReason | null
   repetition: number
   rationale: string
 }
@@ -63,6 +102,7 @@ export interface PlanResponse {
   unscheduled: string[]
 }
 
+/** Calendar-shaped session. Times are ISO 8601 local, no offset. */
 export interface CalendarEvent {
   id: string
   title: string
@@ -77,8 +117,6 @@ export interface CalendarEvent {
   is_review: boolean
 }
 
-export type ChangeType = 'moved' | 'added' | 'blocked'
-
 export interface PlanChange {
   type: ChangeType
   topic: string
@@ -92,14 +130,10 @@ export interface ProgressResponse {
   sessions: StudySession[]
   changes: PlanChange[]
   warnings: string[]
+  insights: Insights | null
 }
 
 export interface AnalyzeResponse {
   topics: Topic[]
-  source: AnalysisSource
-}
-
-export interface DraftSubject extends Subject {
-  materialText: string
-  analysisSource: AnalysisSource | null
+  source: 'ai' | 'fallback'
 }

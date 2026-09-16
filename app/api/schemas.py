@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..models import (
     Completion,
+    Insights,
+    MissReason,
     PlanChange,
     Recall,
     StudySession,
@@ -75,12 +77,22 @@ class ProgressRequest(BaseModel):
     session_id: str
     completion: Completion
     recall: Recall | None = None
+    # 8.3: why the session was missed. Optional so logging never blocks on it.
+    miss_reason: MissReason | None = None
 
 
 class ProgressResponse(BaseModel):
     sessions: list[StudySession]
     changes: list[PlanChange]
     warnings: list[str] = Field(default_factory=list)
+    insights: Insights | None = None
+
+
+class ReasonOption(BaseModel):
+    """A selectable miss reason, served so the UI never hardcodes the list."""
+
+    value: MissReason
+    label: str
 
 
 class AnalyzeRequest(BaseModel):

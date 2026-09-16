@@ -1,31 +1,25 @@
 {
-  "name": "web",
+  "name": "studygrid-web",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-    "test:e2e": "playwright test"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.63.0",
-    "@sveltejs/vite-plugin-svelte": "^7.3.0",
-    "@tsconfig/svelte": "^5.0.8",
-    "@types/node": "^24.13.3",
-    "svelte": "^5.57.0",
-    "svelte-check": "^4.7.6",
-    "typescript": "~6.0.2",
-    "vite": "^8.3.0"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@material/web": "^2.5.0",
-    "@schedule-x/calendar": "^4.8.0",
-    "@schedule-x/events-service": "^4.8.0",
-    "@schedule-x/theme-default": "^4.8.0",
-    "@tabler/icons-svelte": "^3.46.0",
-    "temporal-polyfill": "^0.3.0"
+    "@schedule-x/calendar": "4.8.0",
+    "@schedule-x/theme-default": "4.8.0",
+    "temporal-polyfill": "0.3.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "5.0.3",
+    "@tsconfig/svelte": "5.0.4",
+    "svelte": "5.19.0",
+    "svelte-check": "4.1.4",
+    "typescript": "5.7.3",
+    "vite": "6.0.7"
   }
 }
