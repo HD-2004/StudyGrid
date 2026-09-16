@@ -51,21 +51,30 @@
 
   li {
     font-size: 12px;
-    padding: 8px 0 8px 11px;
-    border-left: 2px solid var(--rule-strong);
+    padding: 8px 10px;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-small);
     margin-bottom: 6px;
   }
 
   li.added {
-    border-left-color: var(--review);
+    border-color: color-mix(in srgb, var(--review) 38%, var(--rule));
+    background: color-mix(in srgb, var(--review) 8%, var(--surface));
   }
 
   li.moved {
-    border-left-color: var(--learn);
+    border-color: color-mix(in srgb, var(--learn) 38%, var(--rule));
+    background: color-mix(in srgb, var(--learn) 8%, var(--surface));
+  }
+
+  li.kept {
+    border-color: color-mix(in srgb, var(--review) 38%, var(--rule));
+    background: color-mix(in srgb, var(--review) 8%, var(--surface));
   }
 
   li.blocked {
-    border-left-color: var(--flag);
+    border-color: color-mix(in srgb, var(--flag) 42%, var(--rule));
+    background: color-mix(in srgb, var(--flag) 8%, var(--surface));
   }
 
   .topic {

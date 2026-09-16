@@ -5,7 +5,17 @@ export type Difficulty = 'easy' | 'medium' | 'hard'
 export type Completion = 'planned' | 'completed' | 'partial' | 'not_completed'
 export type Recall = 'well' | 'medium' | 'poor'
 export type Strategy = 'fresh' | 'remaining' | 'exam_rush'
-export type ChangeType = 'moved' | 'added' | 'blocked'
+export type ChangeType = 'moved' | 'added' | 'kept' | 'blocked'
+export type ChatRole = 'user' | 'assistant'
+export type ActivityCategory =
+  | 'study'
+  | 'work'
+  | 'entertainment'
+  | 'illness'
+  | 'unexpected'
+  | 'rest'
+  | 'other'
+export type ActivitySource = 'manual' | 'study_session'
 export type MissReason =
   | 'club'
   | 'exercise'
@@ -70,6 +80,7 @@ export interface Availability {
   latest?: string
   session_length_minutes: number
   break_minutes?: number
+  long_break_minutes: number
   busy: BusyBlock[]
 }
 
@@ -100,6 +111,12 @@ export interface PlanResponse {
   summary: string
   warnings: string[]
   unscheduled: string[]
+}
+
+export interface PrivacyResponse {
+  anonymous_session: boolean
+  durable_storage: boolean
+  retention_days: number
 }
 
 /** Calendar-shaped session. Times are ISO 8601 local, no offset. */
@@ -136,4 +153,70 @@ export interface ProgressResponse {
 export interface AnalyzeResponse {
   topics: Topic[]
   source: 'ai' | 'fallback'
+}
+
+export interface MaterialAnalyzeResponse extends AnalyzeResponse {
+  material_name: string
+  material_type: 'text' | 'markdown' | 'pdf' | 'docx' | 'url' | 'video'
+  extracted_chars: number
+  truncated: boolean
+  transcription_source: 'ai' | null
+}
+
+export interface ActivityCategoryOption {
+  value: ActivityCategory
+  label: string
+}
+
+export interface ActivityLog {
+  id: string
+  occurred_on: string
+  category: ActivityCategory
+  label: string
+  minutes: number
+  note: string
+  source: ActivitySource
+  source_id: string | null
+  plan_id: string | null
+  created_at: string
+}
+
+export interface ActivityInput {
+  occurred_on: string
+  category: ActivityCategory
+  label: string
+  minutes: number
+  note: string
+}
+
+export interface ActivityDay {
+  date: string
+  minutes: Record<ActivityCategory, number>
+}
+
+export interface ActivityTotal {
+  category: ActivityCategory
+  label: string
+  minutes: number
+}
+
+export interface ActivityDashboard {
+  period_start: string
+  period_end: string
+  days: 7 | 30
+  daily: ActivityDay[]
+  totals: ActivityTotal[]
+  activities: ActivityLog[]
+}
+
+export interface ChatMessage {
+  role: ChatRole
+  content: string
+}
+
+export interface CoachResponse {
+  reply: ChatMessage
+  history: ChatMessage[]
+  source: 'ai' | 'fallback'
+  suggestions: string[]
 }

@@ -8,8 +8,9 @@ Maps to HACKATHON.md sections 6.1-6.6.
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from enum import Enum
+from math import ceil
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -40,15 +41,6 @@ class Recall(str, Enum):
     well = "well"  # mostly recalled
     medium = "medium"  # ~50%
     poor = "poor"  # little to nothing
-
-
-# How recall quality stretches or compresses the next review interval.
-# Loosely SM-2: success expands, failure pulls the review forward.
-RECALL_MULTIPLIER: dict[Recall, float] = {
-    Recall.well: 2.0,
-    Recall.medium: 1.0,
-    Recall.poor: 0.5,
-}
 
 
 class MissReason(str, Enum):
@@ -87,6 +79,61 @@ class Strategy(str, Enum):
     fresh = "fresh"  # full plan, all passes
     remaining = "remaining"  # mid-semester, skip mastered material
     exam_rush = "exam_rush"  # not enough time, triage coverage over depth
+
+
+class ChatRole(str, Enum):
+    user = "user"
+    assistant = "assistant"
+
+
+class ChatMessage(BaseModel):
+    """One persisted turn in the plan-aware Study Coach conversation."""
+
+    role: ChatRole
+    content: str = Field(min_length=1, max_length=4_000)
+
+
+class ActivityCategory(str, Enum):
+    """Stable chart groups; `label` on ActivityLog carries user wording."""
+
+    study = "study"
+    work = "work"
+    entertainment = "entertainment"
+    illness = "illness"
+    unexpected = "unexpected"
+    rest = "rest"
+    other = "other"
+
+
+ACTIVITY_CATEGORY_LABELS: dict[ActivityCategory, str] = {
+    ActivityCategory.study: "Study",
+    ActivityCategory.work: "Work",
+    ActivityCategory.entertainment: "Entertainment",
+    ActivityCategory.illness: "Illness",
+    ActivityCategory.unexpected: "Unexpected",
+    ActivityCategory.rest: "Rest",
+    ActivityCategory.other: "Other",
+}
+
+
+class ActivitySource(str, Enum):
+    manual = "manual"
+    study_session = "study_session"
+
+
+class ActivityLog(BaseModel):
+    """One owner-scoped block of real time used by Progress analytics."""
+
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    occurred_on: date
+    category: ActivityCategory
+    label: str = Field(min_length=1, max_length=120)
+    minutes: int = Field(ge=1, le=1_440)
+    note: str = Field(default="", max_length=1_000)
+    source: ActivitySource = ActivitySource.manual
+    source_id: str | None = Field(default=None, max_length=200)
+    plan_id: str | None = Field(default=None, max_length=100)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class Topic(BaseModel):
@@ -141,8 +188,11 @@ class Availability(BaseModel):
     weekday_minutes: dict[int, int] = Field(default_factory=dict)
     earliest: time = time(9, 0)
     latest: time = time(22, 0)
-    session_length_minutes: int = Field(default=50, ge=15, le=180)
-    break_minutes: int = Field(default=10, ge=0, le=60)
+    session_length_minutes: int = Field(default=60, ge=15, le=240)
+    # Derived in _check_window so API callers and the UI cannot accidentally
+    # create a plan that skips the 10% recovery period.
+    break_minutes: int = Field(default=6, ge=0, le=60)
+    long_break_minutes: int = Field(default=45, ge=30, le=180)
     busy: list[BusyBlock] = Field(default_factory=list)
 
     @field_validator("weekday_minutes")
@@ -159,6 +209,7 @@ class Availability(BaseModel):
     def _check_window(self) -> Availability:
         if self.earliest >= self.latest:
             raise ValueError("earliest must precede latest")
+        self.break_minutes = ceil(self.session_length_minutes * 0.10)
         return self
 
 
@@ -222,6 +273,7 @@ class StudyPlan(BaseModel):
 class ChangeType(str, Enum):
     moved = "moved"
     added = "added"
+    kept = "kept"  # existing session already matches the adaptive target
     blocked = "blocked"  # wanted to adapt but had no room
 
 

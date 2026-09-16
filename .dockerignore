@@ -1,0 +1,12 @@
+.git
+.github
+.kiro
+.venv
+.env
+**/__pycache__
+**/*.pyc
+artifacts
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report

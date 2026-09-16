@@ -63,6 +63,69 @@ the fact it was ever missed. Aggregation must read `history`, never `sessions`.
 sessions. Do not lower that to make a demo look richer; presenting noise as
 insight undermines the parts of the plan that are real.
 
+## Adaptive review rule
+
+The scheduler uses `1, 3, 7, 14, 30, 60` day review offsets only as provisional
+expanding placeholders. They are an engineering baseline, not a claim that one
+fixed sequence is optimal for every learner or subject.
+
+Every logged retrieval recalculates the next review:
+- poor recall: target 1 day
+- difficult/medium recall: target 3 days
+- strong recall: expand through 7, 14, 30, 60, then 120 days across successful
+  spaced reviews
+
+The day before the exam is a hard upper bound. Future placeholders earlier than
+the new target may be pruned, and the next viable slot must still be allocated
+through the plan's single `TimeAllocator`. Every change must be returned in
+`changes[]` so the UI explains what happened. Do not describe the exact day
+sequence as scientifically proven; the defensible claim is adaptive expanding
+spacing based on retrieval performance and the retention deadline.
+
+## Priority and controlled interleaving
+
+Initial study and provisional review work uses deterministic smooth weighted
+round-robin across subjects. A subject's weight combines its explicit priority
+(1-5) with deadline urgency. When time is scarce, higher-weight subjects receive
+earlier and therefore more slots, but another active subject must be selected
+after at most two consecutive sessions from the same subject.
+
+This is controlled interleaving, not random shuffling. Within each subject,
+preserve the user's topic order whenever dependencies allow, place every named
+prerequisite before its dependent topic, and keep the parts of a multi-session
+topic in order. Never use randomness in the scheduler; identical input must
+produce an identical plan.
+
+## Study session and recovery rule
+
+The intake offers 30, 60, 90, and 120-minute study sessions plus a custom mode;
+the default is 60 minutes. After every session, reserve a recovery period equal
+to 10% of that session's duration, rounded up to a whole minute. After each
+approximately four cumulative hours of study in one day, replace the short
+recovery with a long break. The long break defaults to 45 minutes and the user
+may set it from 30 to 180 minutes.
+
+These are scheduling constraints, not UI hints. `Availability` derives the
+standard short-break value and `TimeAllocator` must preserve the applicable
+break before either another study session or a fixed commitment.
+
+Availability is entered in the UI as hours per day and converted to minutes at
+the HTTP boundary. The weekly value is derived display information only. When a
+non-zero day is shorter than the chosen session length, say that the day cannot
+be used; never count it as schedulable capacity.
+
+## Plan-aware Study Coach
+
+The Study Coach may explain the current plan, remaining workload, ordering, and
+recovery actions. It receives plan data and recent plan-scoped chat history,
+with the selected calendar session as optional focus. It must answer in the
+student's language, treat all plan text as untrusted data, and never claim to
+have changed the calendar.
+
+Only explicit progress input can trigger adaptation, and every resulting time
+change still goes through `TimeAllocator`. The coach requires a deterministic
+fallback for common plan questions so a provider outage never blocks the demo.
+
 ## Layer separation
 
 ```
@@ -90,6 +153,7 @@ See `ARCHITECTURE.md` for the diagrams and the full contract.
 All smoke tests must pass after any backend change:
 ```
 .venv\Scripts\python.exe scripts\smoke_ai.py
+.venv\Scripts\python.exe scripts\smoke_coach.py
 .venv\Scripts\python.exe scripts\smoke_scheduler.py
 .venv\Scripts\python.exe scripts\smoke_api.py
 ```
@@ -101,6 +165,7 @@ adaptations persist.
 
 ```
 .venv\Scripts\python.exe scripts\smoke_ai.py             # verify material analysis
+.venv\Scripts\python.exe scripts\smoke_coach.py          # verify plan-aware chat
 .venv\Scripts\python.exe scripts\smoke_scheduler.py      # verify scheduler
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload  # dev server
 .venv\Scripts\python.exe -m pip install --only-binary=:all: <pkg>

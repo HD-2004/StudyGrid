@@ -38,10 +38,10 @@
   }
 </script>
 
-<aside>
+<section class="session-detail" aria-labelledby="session-title">
   <header>
     <div>
-      <h2>{event.topic}</h2>
+      <h2 id="session-title">{event.topic}</h2>
       <p class="meta">{event.subject}</p>
     </div>
     <button class="link" onclick={onClose}>Close</button>
@@ -69,9 +69,9 @@
     <div class="field">
       <label for="recall">How much could you recall?</label>
       <select id="recall" bind:value={recall}>
-        <option value="well">Most of it</option>
-        <option value="medium">About half</option>
-        <option value="poor">Very little</option>
+        <option value="well">Strong recall (most of it)</option>
+        <option value="medium">Difficult recall (about half)</option>
+        <option value="poor">Forgot (very little)</option>
       </select>
     </div>
   {/if}
@@ -106,19 +106,18 @@
     {#if completion === 'not_completed'}
       This session moves to your next free slot.
     {:else if asksRecall && recall === 'poor'}
-      An extra review gets added soon after today.
+      The next review targets the first viable slot from tomorrow.
     {:else if asksRecall && recall === 'medium'}
-      A review gets added at a shorter interval.
+      The next review targets the first viable slot in about three days.
     {:else}
-      Your remaining reviews stay as planned.
+      Strong recall expands the next review interval.
     {/if}
   </p>
-</aside>
+</section>
 
 <style>
-  aside {
-    border-left: 1px solid var(--rule);
-    padding-left: var(--gutter);
+  .session-detail {
+    min-width: 0;
   }
 
   header {
@@ -174,19 +173,20 @@
     background: transparent;
     border: 1px solid var(--rule-strong);
     color: var(--ink-soft);
-    padding: 4px 9px;
+    min-height: 38px;
+    padding: 6px 10px;
     font-size: 12px;
-    border-radius: 2px;
+    border-radius: var(--radius-small);
   }
 
   .chip:hover {
-    background: #f0ede6;
+    background: var(--surface-subtle);
   }
 
   .chip.selected {
-    background: var(--ink);
-    border-color: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .aside-note,
@@ -194,5 +194,9 @@
     font-size: 12px;
     color: var(--ink-soft);
     margin: 8px 0 0;
+  }
+
+  .session-detail > button:not(.link) {
+    width: 100%;
   }
 </style>

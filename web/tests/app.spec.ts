@@ -1,6 +1,26 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 
-test('analyzes material, builds a plan, and adapts after recall feedback', async ({ page }) => {
+function summarizeViolations(
+  violations: Awaited<ReturnType<AxeBuilder['analyze']>>['violations'],
+) {
+  return violations.map((violation) => ({
+    id: violation.id,
+    impact: violation.impact,
+    nodes: violation.nodes.map((node) => ({
+      target: node.target,
+      html: node.html,
+      failure: node.failureSummary,
+    })),
+  }))
+}
+
+async function fillMinimalPlan(dialog: Locator) {
+  await dialog.getByLabel('Subject').first().fill('Linear Algebra')
+  await dialog.getByLabel('Topic 1 name').first().fill('Vector spaces')
+}
+
+test('analyzes real input, builds a plan, adapts it, and resets cleanly', async ({ page }) => {
   const browserErrors: string[] = []
   page.on('console', (message) => {
     if (message.type() === 'error') browserErrors.push(message.text())
@@ -8,74 +28,190 @@ test('analyzes material, builds a plan, and adapts after recall feedback', async
   page.on('pageerror', (error) => browserErrors.push(error.message))
 
   await page.goto('/')
-  await page.locator('.empty-calendar-overlay .material-tonal-button').click()
-  await expect(page.getByRole('heading', { name: 'Create study plan' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Build around your real week' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Create your study schedule' })).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.locator('main.app-shell')).not.toHaveAttribute('inert', '')
 
-  await page.getByRole('button', { name: 'Analyze material' }).first().click()
-  await expect(page.getByText(/topics extracted/i).first()).toBeVisible()
+  await page.locator('.empty-calendar-overlay').getByRole('button', { name: 'Create study plan' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Create study plan' })
+  await expect(dialog).toBeVisible()
+  await expect(page.locator('main.app-shell')).toHaveAttribute('inert', '')
+  await fillMinimalPlan(dialog)
 
-  await page.getByRole('button', { name: 'Generate study plan' }).click()
-  const invalidFields = await page.locator('input:invalid, select:invalid, textarea:invalid').evaluateAll(
-    (elements) =>
-      elements.map((element) => ({
-        tag: element.tagName,
-        name: element.getAttribute('aria-label') || element.getAttribute('name'),
-        value: (element as HTMLInputElement).value,
-        message: (element as HTMLInputElement).validationMessage,
-      })),
-  )
-  expect(invalidFields, JSON.stringify(invalidFields)).toEqual([])
+  const material = dialog.getByLabel('Or paste a syllabus, notes, or topic outline').first()
+  await material.fill(`
+    Vector spaces and linear combinations
+    Matrix transformations and determinants
+    Eigenvalues and eigenvectors
+    Orthogonality and least squares
+  `)
+  await dialog.getByRole('button', { name: 'Analyze pasted text' }).first().click()
+  await expect(dialog.getByText(/topics extracted and added below/i)).toBeVisible({ timeout: 30_000 })
+  await expect(dialog.getByText(/OpenAI analysis|Offline fallback/)).toBeVisible()
+
+  await dialog.getByRole('button', { name: 'Generate study plan' }).click()
+  await expect(dialog).toHaveCount(0)
   await expect(page.locator('.sx__event').first()).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Review the plan' })).toBeVisible()
 
   await page.locator('.sx__event').first().click()
-  const dialog = page.getByRole('dialog')
-  await expect(dialog.getByText('How did this session go?')).toBeVisible()
-  await dialog.getByText('Very little').click()
-  await dialog.getByRole('button', { name: 'Save progress' }).click()
+  await expect(page.locator('.session-detail')).toBeVisible()
+  await page.getByLabel('How much could you recall?').selectOption('poor')
+  await page.getByRole('button', { name: 'Save and update plan' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Your plan adapted' })).toBeVisible()
-  await page.screenshot({ path: 'test-results/studygrid-plan.png', fullPage: true })
+  await expect(page.getByRole('heading', { name: 'Where your week went' })).toBeVisible()
+  await expect(page.getByText('Synced from study progress')).toBeVisible()
+
+  await page.getByLabel('Category', { exact: true }).selectOption('unexpected')
+  await page.getByLabel('Custom label').fill('Urgent family task')
+  await page.getByLabel('Duration (minutes)').fill('90')
+  await page.getByRole('button', { name: 'Log activity' }).click()
+  await expect(page.getByText('Urgent family task')).toBeVisible()
+  await page.getByRole('button', { name: '30 days' }).click()
+  await expect(page.getByRole('heading', { name: 'Category totals (30 days)' })).toBeVisible()
+
+  const progressResults = await new AxeBuilder({ page })
+    .include('.progress-dashboard')
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+    .analyze()
+  expect(summarizeViolations(progressResults.violations)).toEqual([])
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  const progressOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  )
+  expect(progressOverflow).toBe(false)
+  await expect(page.locator('.progress-dashboard')).toBeVisible()
+  await page.setViewportSize({ width: 1440, height: 1000 })
+
+  await page.getByRole('button', { name: 'Return to calendar' }).click()
+  await expect(page.getByRole('heading', { name: 'See the adaptation' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'What changed' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Start a new plan' }).click()
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Close plan setup' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('.empty-calendar-overlay')).toBeVisible()
 
   expect(browserErrors).toEqual([])
 })
 
-test('fits a mobile viewport and supports dark mode', async ({ page }) => {
+test('supports dark mode, phone layout, and keyboard dismissal', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: 'Create your study schedule' })).toBeVisible()
   await page.getByRole('button', { name: 'Switch to dark theme' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-  await page.locator('.empty-calendar-overlay .material-tonal-button').click()
-  await expect(page.getByRole('heading', { name: 'Create study plan' })).toBeVisible()
+
+  await page.locator('.empty-calendar-overlay').getByRole('button', { name: 'Create study plan' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Create study plan' })
+  await expect(dialog).toBeVisible()
+
+  await page.keyboard.press('Tab')
+  const focusedTag = await page.evaluate(() => document.activeElement?.tagName)
+  expect(focusedTag).not.toBe('BODY')
+
+  const unlabeledFields = await dialog.locator('input, select, textarea').evaluateAll((elements) =>
+    elements
+      .filter((element) => {
+        const id = element.getAttribute('id')
+        const hasLabel = id ? Boolean(document.querySelector(`label[for="${id}"]`)) : false
+        return !hasLabel && !element.getAttribute('aria-label') && !element.closest('label')
+      })
+      .map((element) => element.outerHTML),
+  )
+  expect(unlabeledFields).toEqual([])
+
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   )
   expect(hasHorizontalOverflow).toBe(false)
-  await page.screenshot({ path: 'test-results/studygrid-mobile-dark.png' })
 })
 
-test('calendar is interactive on load and the setup drawer can close and reopen', async ({ page }) => {
+test('keeps the empty calendar interactive while setup opens and closes', async ({ page }) => {
   await page.goto('/')
 
   const shell = page.locator('main.app-shell')
-  const drawer = page.getByRole('dialog', { name: 'Create study plan' })
+  const createButton = page
+    .locator('.empty-calendar-overlay')
+    .getByRole('button', { name: 'Create study plan' })
 
-  await expect(drawer).toHaveCount(0)
   await expect(shell).not.toHaveAttribute('inert', '')
+  await expect(page.locator('.calendar')).toBeVisible()
 
-  await page.locator('.empty-calendar-overlay .material-tonal-button').click()
-  await expect(drawer).toBeVisible()
+  await createButton.click()
+  const dialog = page.getByRole('dialog', { name: 'Create study plan' })
+  await expect(dialog).toBeVisible()
   await expect(shell).toHaveAttribute('inert', '')
 
-  await drawer.getByRole('button', { name: 'Close plan setup' }).click()
-  await expect(drawer).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Close plan setup' }).click()
+  await expect(dialog).toHaveCount(0)
   await expect(shell).not.toHaveAttribute('inert', '')
+  await expect(createButton).toBeFocused()
+})
 
-  await page.locator('.menu-button').click()
-  await expect(drawer).toBeVisible()
-  await page.locator('.planner-scrim').click()
-  await expect(drawer).toHaveCount(0)
+test('restores an owned plan after reload and deletes all session data on request', async ({ page }) => {
+  await page.goto('/')
+  await page.locator('.empty-calendar-overlay').getByRole('button', { name: 'Create study plan' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Create study plan' })
+  await fillMinimalPlan(dialog)
+  await dialog.getByRole('button', { name: 'Generate study plan' }).click()
+  await expect(page.locator('.sx__event').first()).toBeVisible()
+  const countBeforeReload = await page.locator('.sx__event').count()
+
+  await page.reload()
+  await expect(page.locator('.sx__event').first()).toBeVisible()
+  await expect(page.locator('.sx__event')).toHaveCount(countBeforeReload)
+  await expect(page.getByText('Anonymous user-test session')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Delete my data' }).click()
+  await page.getByRole('button', { name: 'Confirm delete all' }).click()
+  await expect(page.locator('.empty-calendar-overlay')).toBeVisible()
+
+  await page.reload()
+  await expect(
+    page.locator('.empty-calendar-overlay').getByRole('button', { name: 'Create study plan' }),
+  ).toBeVisible()
+})
+
+test('uploads a Markdown file and shows an actionable backend-unavailable error', async ({ page }) => {
+  await page.goto('/')
+  await page.locator('.empty-calendar-overlay').getByRole('button', { name: 'Create study plan' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Create study plan' })
+  await dialog.getByLabel('Subject').first().fill('Biology')
+
+  await dialog.getByLabel('Upload a document or recording').first().setInputFiles({
+    name: 'biology.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('# Cell cycle\n## Mitosis\n## Membrane transport'),
+  })
+  await dialog.getByRole('button', { name: 'Analyze file' }).click()
+  await expect(dialog.getByText(/topics extracted from biology.md/i)).toBeVisible()
+
+  await page.route('**/api/analyze', async (route) => {
+    await route.fulfill({ status: 500, contentType: 'text/plain', body: 'Internal Server Error' })
+  })
+  await dialog.getByLabel('Or paste a syllabus, notes, or topic outline').fill('Foundation')
+  await dialog.getByRole('button', { name: 'Analyze pasted text' }).click()
+  await expect(dialog.getByText(/Cannot reach the StudyGrid API/i)).toBeVisible()
+})
+
+test('passes automated WCAG A and AA checks for planner and setup', async ({ page }) => {
+  await page.goto('/')
+
+  const plannerResults = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+    .analyze()
+  expect(summarizeViolations(plannerResults.violations)).toEqual([])
+
+  await page.locator('.empty-calendar-overlay').getByRole('button', { name: 'Create study plan' }).click()
+  const setupResults = await new AxeBuilder({ page })
+    .include('.planner-dialog')
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+    .analyze()
+  expect(summarizeViolations(setupResults.violations)).toEqual([])
 })

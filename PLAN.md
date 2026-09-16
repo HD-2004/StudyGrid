@@ -70,35 +70,56 @@ Checkpoint: end-to-end demo in a browser.
 - [x] Insights panel with lost-time attribution
 - [x] Tests: `scripts/smoke_insights.py`, plus browser coverage in `smoke_ui.py`
 
-## Phase 4 — Demo polish (prepared, next)
+## Phase 4 — Demo polish (done and verified)
 
+- [x] Adaptive expanding review intervals driven by recall and exam deadline
+- [x] Priority-weighted controlled interleaving with prerequisite-safe ordering
+- [x] Session presets/custom duration, 10% recovery, and configurable long break after four hours
+- [x] Daily availability in hours with weekly summary and unusable-day warning
+- [x] Plan-aware Study Coach with persisted history and deterministic fallback
 - [x] Keep the calendar interactive on first load; setup opens only on request
 - [x] Make adaptation visible: show what moved and why
 - [x] Empty and over-capacity states worded honestly
 - [x] Mobile and dark-mode browser checks
-- [ ] Add three one-click judge presets: fresh start, mid-semester, exam rush
-- [ ] Show whether material analysis used OpenAI or the offline fallback
-- [ ] Add a short guided demo path with a reliable reset action
-- [ ] Run a keyboard and screen-reader pass on the complete judge flow
-- [ ] Prepare deployment configuration and a production smoke checklist
+- [x] Replace one-click starting-point presets with editable dates, daily study
+      windows, capacity, and fixed commitments from the real user
+- [x] Show whether material analysis used OpenAI or the offline fallback
+- [x] Add a short guided demo path with a reliable backend reset action
+- [x] Run keyboard, accessible-name, and automated WCAG A/AA checks on the judge flow
+- [x] Prepare single-container deployment configuration and a production smoke checklist
 
-## Phase 5 — If time remains
+## Phase 5A — Public user-test readiness (done and verified)
 
-- [ ] SQLite persistence
-- [ ] File upload (PDF/DOCX) instead of pasted text
+- [x] Capture product strategy and accessibility intent in `PRODUCT.md`
+- [x] SQLite persistence with schema versioning and configurable retention
+- [x] Signed HttpOnly anonymous browser sessions
+- [x] Enforce plan ownership on read, update, chat, insights, and delete routes
+- [x] Restore the latest owned plan after a browser reload
+- [x] Add delete-my-data controls and a dynamic retention notice
+- [x] Persist `/data` in the production container and require `SESSION_SECRET`
+- [x] Add security headers and multi-user persistence smoke coverage
+
+Checkpoint: one public deployment can serve independent anonymous testers
+without exposing plans across browsers or losing all data on every restart.
+
+## Phase 5B — If time remains
+
+- [x] DOCX, TXT, Markdown, and PDF upload with bounded extraction
+- [x] Public URL ingestion with private-network/SSRF blocking
+- [x] Video/audio transcription when an OpenAI key is configured
+- [x] Progress analytics with 7/30-day charts and owner-scoped activity logs
+- [x] Custom planning date, daily window, capacity, and fixed commitments
 - [ ] Concept relationship graph
 - [ ] Pitch deck via the `pptx` skill
 
 ## Cut list, in order
 
-Persistence, file upload, the concept graph, and multi-user accounts. The demo
-works without all four.
+The concept graph, named/cross-device accounts, and the pitch deck. The public
+user-test flow works without all three.
 
 ## Open decisions
 
-1. Sections 10, 11, and 12 of HACKATHON.md are empty and are judged
-2. The earlier Material 3 frontend (dark mode, mobile, setup drawer) was
-   overwritten. `web/tests/app.spec.ts` still targets it and will fail against
-   the current UI. Either restore that UI from editor history or rewrite the
-   spec to match what exists.
-3. Nothing is committed to git yet.
+1. Anonymous sessions isolate public testers but do not provide named accounts
+   or cross-device recovery. Decide whether either is required after testing.
+2. Decide whether the concept graph or pitch polish creates more judging value.
+3. The current worktree still needs a reviewed commit before deployment.

@@ -149,8 +149,10 @@
   .observations li {
     font-size: 12px;
     color: var(--ink-soft);
-    padding-left: 11px;
-    border-left: 2px solid var(--rule-strong);
+    padding: 7px 9px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-small);
+    background: var(--surface-subtle);
     margin-bottom: 6px;
   }
 

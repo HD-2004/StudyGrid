@@ -7,12 +7,16 @@ scheduler produces.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 from ..models import (
+    ACTIVITY_CATEGORY_LABELS,
+    ActivityCategory,
+    ActivityLog,
+    ChatMessage,
     Completion,
     Insights,
     MissReason,
@@ -31,13 +35,22 @@ class PlanResponse(BaseModel):
     unscheduled: list[str] = Field(default_factory=list)
 
 
+class PrivacyResponse(BaseModel):
+    """Public retention facts for the user-test interface."""
+
+    anonymous_session: bool = True
+    durable_storage: bool
+    retention_days: int
+
+
 class CalendarEvent(BaseModel):
     """Shaped for the calendar component.
 
     Times are ISO 8601 local, no offset. Schedule-X v4 expects
-    Temporal.ZonedDateTime, so the frontend attaches the browser timezone
-    once in lib/api.ts. Sending naive local time keeps the backend free of
-    timezone handling, which is out of scope for a single-user demo.
+    Temporal.ZonedDateTime, so Calendar.svelte attaches the browser timezone to
+    each event and configures Schedule-X to render in that same timezone.
+    Sending naive local time keeps the backend free of timezone handling, which
+    is out of scope for a single-user demo.
     """
 
     id: str
@@ -99,11 +112,83 @@ class AnalyzeRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     subject: str = Field(min_length=1, max_length=200)
-    # Keeps provider cost and latency bounded for the pasted-text MVP. File
-    # ingestion and chunking are deliberately deferred.
+    # Keeps provider cost and latency bounded for pasted text. Uploaded and
+    # fetched materials use the same bounded analysis window after extraction.
     text: str = Field(min_length=1, max_length=30_000)
 
 
 class AnalyzeResponse(BaseModel):
     topics: list[Topic]
     source: Literal["ai", "fallback"]
+
+
+class MaterialAnalyzeResponse(AnalyzeResponse):
+    """Topics plus transparent extraction metadata for uploaded material."""
+
+    material_name: str
+    material_type: Literal["text", "markdown", "pdf", "docx", "url", "video"]
+    extracted_chars: int
+    truncated: bool = False
+    transcription_source: Literal["ai"] | None = None
+
+
+class MaterialUrlRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    subject: str = Field(min_length=1, max_length=200)
+    url: AnyHttpUrl
+
+
+class ActivityRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    occurred_on: date
+    category: ActivityCategory
+    label: str = Field(min_length=1, max_length=120)
+    minutes: int = Field(ge=1, le=1_440)
+    note: str = Field(default="", max_length=1_000)
+
+
+class ActivityCategoryOption(BaseModel):
+    value: ActivityCategory
+    label: str
+
+    @classmethod
+    def all(cls) -> list[ActivityCategoryOption]:
+        return [cls(value=value, label=label) for value, label in ACTIVITY_CATEGORY_LABELS.items()]
+
+
+class ActivityDay(BaseModel):
+    date: date
+    minutes: dict[ActivityCategory, int]
+
+
+class ActivityTotal(BaseModel):
+    category: ActivityCategory
+    label: str
+    minutes: int
+
+
+class ActivityDashboardResponse(BaseModel):
+    period_start: date
+    period_end: date
+    days: int
+    daily: list[ActivityDay]
+    totals: list[ActivityTotal]
+    activities: list[ActivityLog]
+
+
+class CoachRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    plan_id: str = Field(min_length=1, max_length=100)
+    message: str = Field(min_length=1, max_length=1_000)
+    # When a calendar session is selected, "why this?" can be grounded in it.
+    session_id: str | None = Field(default=None, max_length=100)
+
+
+class CoachResponse(BaseModel):
+    reply: ChatMessage
+    history: list[ChatMessage]
+    source: Literal["ai", "fallback"]
+    suggestions: list[str]

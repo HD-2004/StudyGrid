@@ -100,9 +100,47 @@ The student provides:
 - Subject priorities
 - Other learning preferences
 
+Availability is entered as hours for each day. The weekly total is derived for
+visibility, not entered as a separate target. A non-zero day shorter than the
+selected session duration cannot host that session and is reported clearly in
+the intake rather than silently treated as usable time.
+
+Study sessions use 30, 60, 90, or 120-minute presets, with a custom-duration
+mode when needed. The default is 60 minutes. Every completed session reserves a
+short recovery equal to 10% of its duration, rounded up to a whole minute.
+After approximately four cumulative study hours in a day, the short recovery
+is replaced by a longer break: 45 minutes by default, configurable by the
+student from 30 to 180 minutes. These breaks consume clock time but do not count
+toward the student's daily study-minute budget.
+
 ### 6.3 Spaced Review Scheduling
 
 StudyGrid schedules future review sessions based on spaced repetition principles rather than requiring students to manually decide when to review each topic.
+
+The initial calendar uses expanding review offsets such as 1, 3, 7, 14, 30,
+and 60 days as provisional placeholders, adjusted for topic difficulty and the
+time remaining before the exam. This sequence is a practical starting policy,
+not a universal claim about an optimal interval.
+
+Each logged retrieval recalculates the next review:
+
+- Poor recall targets the next day.
+- Difficult or partial recall targets about three days.
+- Strong recall expands through 7, 14, 30, 60, and 120 days across successful
+  spaced reviews.
+- No review may be placed on or after the exam; a longer interval is compressed
+  to the final study day when possible.
+
+Future review sessions remain provisional. StudyGrid can move or prune them as
+recall evidence arrives, while still respecting availability, fixed
+commitments, daily study limits, and the exam deadline.
+
+StudyGrid also uses controlled interleaving across subjects. Explicit subject
+priority and exam urgency determine how frequently each subject receives a
+slot. When multiple subjects still have ready work, no subject receives more
+than two consecutive sessions. This prevents long monotonous blocks without
+randomizing the plan: topic input order and prerequisite relationships remain
+intact inside each subject.
 
 ### 6.4 Adaptive Schedule
 
@@ -110,9 +148,10 @@ When the student's actual behavior differs from the original schedule, StudyGrid
 
 ### 6.5 Time-Use Insights
 
-When a session is not completed, StudyGrid captures a short reason and
-aggregates those reasons over time, so students can see where their study time
-actually goes. Detailed behavior is described in 8.3.
+Completed sessions sync into an owner-scoped time log. Students can also record
+work, entertainment, illness, unexpected events, rest, or a custom label.
+Progress shows real 7/30-day stacked charts alongside missed-session reasons,
+so the planner explains both scheduled study and the rest of the week.
 
 ### 6.6 Progress Tracking
 
@@ -129,6 +168,18 @@ and how the sessions/ topic are done:
 - Poorly done (Recall very little to no information)
 
 This information can be used to update future scheduling.
+
+### 6.7 Plan-Aware Study Coach
+
+Students can ask a chatbot about their current plan, including what to study
+next, how much work remains, why a session was placed where it is, and how to
+recover after falling behind. The coach receives the persisted plan, recent
+conversation turns, and the currently selected session when applicable.
+
+The coach is advisory and cannot mutate calendar timestamps. Schedule changes
+still require explicit progress input and pass through the deterministic
+scheduler. Provider failures use a deterministic, plan-aware fallback so the
+chat remains useful during a demo without network access.
 
 ## 7. User Journey
 
@@ -229,30 +280,77 @@ Weekly/monthly insight dashboard showing:
 
 ## 9. AI Component
 
-StudyGrid uses AI only for material analysis: turning pasted syllabus text into
-a validated list of topics with difficulty, estimated learning time, and topic
-dependencies. The AI does not create calendar timestamps. A deterministic
-scheduler places the resulting topics so sessions cannot overlap fixed
-commitments or extend beyond an exam deadline.
+StudyGrid uses AI for two bounded tasks: turning pasted syllabus text into a
+validated list of topics, and answering read-only Study Coach questions using
+the student's current plan as context. AI never creates or changes calendar
+timestamps. A deterministic scheduler places and adapts sessions so they cannot
+overlap fixed commitments or extend beyond an exam deadline.
 
 The model provider is isolated behind an `LLMProvider` interface. The MVP uses
 the OpenAI Responses API with Pydantic Structured Outputs, and validates every
 result against the shared `Topic` model before it reaches the scheduler.
 
 If the API key is missing, the request times out, the provider is unavailable,
-or its response is invalid, StudyGrid automatically extracts topics from
-headings and list items with a deterministic fallback. The API response reports
-`source: "ai"` or `source: "fallback"` so the UI can explain which path was
-used. This keeps the live demo functional without hiding provider failures.
+or its response is invalid, StudyGrid uses deterministic fallbacks: topic
+extraction for course material and plan-derived answers for common coach
+questions. Responses report `source: "ai"` or `source: "fallback"` so the UI
+can explain which path was used. This keeps the live demo functional without
+hiding provider failures.
 
 ## 10. MVP Scope
 
 ### Must Have
+- Paste or upload material and extract editable topics with a visible AI/fallback source.
+- Generate a conflict-free study calendar from deadlines and weekly capacity.
+- Distinguish first passes from spaced reviews.
+- Log completion and recall, then explain every schedule adaptation.
+- Keep the complete demo usable when the model provider is unavailable.
+- Persist public user-test plans and isolate them by anonymous browser session.
+- Show owner-scoped Progress charts from real study and activity logs.
+
 ### Should Have
+- Custom plan start, daily study window, capacity, and fixed commitments.
+- Plan-aware Study Coach with bounded, plan-scoped history.
+- Time-use insights based on an append-only outcome history.
+- Responsive light/dark UI with keyboard and WCAG checks.
+
 ### Could Have
+- Named accounts and cross-device plan recovery.
+- A concept relationship graph and richer recall exercises.
 
 ## 11. Prototype Status
 
+The end-to-end prototype is complete for supervised demos and user testing.
+Backend smoke tests cover analysis, scheduler invariants, coach grounding,
+adaptation, and insights. The Svelte app passes type checks and production
+builds. Playwright covers the complete judge flow, phone layout, dark mode,
+keyboard dismissal, field labels, and automated WCAG A/AA checks.
+
+The public user-test deployment uses SQLite and a signed HttpOnly anonymous
+session cookie. Plans survive server restarts and are isolated between browser
+sessions. There are still no named accounts or cross-device recovery, so
+testers must not enter private information and should use the in-product data
+deletion control when finished.
+
 ## 12. Demo Flow
 
+1. Open the empty calendar and choose **Create study plan**.
+2. Set the planning date, daily window, available hours, and commitments.
+3. Upload DOCX/TXT/MD/PDF or paste notes, run material analysis, and point out the visible
+   OpenAI or offline-fallback source.
+4. Generate the calendar and show the first-pass/review distinction.
+5. Ask Study Coach what to study next.
+6. Open a session, report poor recall, and show what moved and why.
+7. Open Progress, log unexpected work, and show the 7/30-day category chart.
+8. Report a missed session with a reason and show the time-use insight.
+9. Create an intentionally over-capacity custom window and show the honest
+   warning for material that cannot fit.
+
 ## 13. Future Development
+
+- Add named accounts and optional cross-device plan recovery if testing shows a
+  real need beyond anonymous sessions.
+- Add timezone-aware calendars and multi-device synchronization.
+- Add source-linked excerpts and OCR for image-only PDFs.
+- Calibrate spacing policies with longitudinal learner outcomes.
+- Add privacy controls, retention settings, and production observability.

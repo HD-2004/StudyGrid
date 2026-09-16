@@ -11,8 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient
 
-from app.ai import MaterialAnalyzer
-from app.api.routes import get_material_analyzer
+from app.ai import MaterialAnalyzer, StudyCoach
+from app.api.routes import get_material_analyzer, get_study_coach
 from app.main import app
 
 client = TestClient(app)
@@ -93,7 +93,40 @@ assert len(sample["start"]) == 19, f"unexpected start format: {sample['start']}"
 print(f"[ok] GET events -> {len(events)} events, e.g. {sample['title']!r} "
       f"at {sample['start']}")
 
-# Progress: poor recall should add a review and report the change.
+# Study Coach must use the stored plan, persist bounded history, and retain a
+# deterministic path when no AI provider is configured.
+app.dependency_overrides[get_study_coach] = lambda: StudyCoach()
+r = client.post(
+    "/api/chat",
+    json={"plan_id": plan_id, "message": "What should I study next?"},
+)
+assert r.status_code == 200, r.text
+chat = r.json()
+assert chat["source"] == "fallback"
+assert len(chat["history"]) == 2
+first_topic = plan["sessions"][0]["topic"]
+assert first_topic in chat["reply"]["content"]
+
+r = client.post(
+    "/api/chat",
+    json={
+        "plan_id": plan_id,
+        "session_id": plan["sessions"][0]["id"],
+        "message": "Why this session?",
+    },
+)
+assert r.status_code == 200, r.text
+assert len(r.json()["history"]) == 4, "chat history should persist per plan"
+assert client.post(
+    "/api/chat", json={"plan_id": "nope", "message": "What next?"}
+).status_code == 404
+assert client.post(
+    "/api/chat", json={"plan_id": plan_id, "message": "   "}
+).status_code == 422
+app.dependency_overrides.pop(get_study_coach)
+print("[ok] POST /api/chat -> grounded reply with persistent history")
+
+# Progress: poor recall should adapt the next review and report the change.
 first = plan["sessions"][0]
 r = client.post(
     "/api/progress",
@@ -106,14 +139,29 @@ r = client.post(
 )
 assert r.status_code == 200, r.text
 body = r.json()
-assert len(body["sessions"]) == len(plan["sessions"]) + 1, "expected an extra review"
 assert body["changes"], "adaptation must be reported"
+next_reviews = [
+    s
+    for s in body["sessions"]
+    if s["subject"] == first["subject"]
+    and s["topic"] == first["topic"]
+    and s["repetition"] > 1
+    and s["start"] > first["start"]
+]
+assert next_reviews, "adaptive review is missing"
 print(f"[ok] POST /api/progress -> {body['changes'][0]['why']}")
 
 # Adaptation must survive a reload, proving it was persisted.
 r = client.get(f"/api/plan/{plan_id}/events")
-assert len(r.json()) == len(plan["sessions"]) + 1, "change did not persist"
+assert len(r.json()) == len(body["sessions"]), "change did not persist"
 print("[ok] adaptation persisted")
+
+# Reset removes only the requested plan and makes subsequent access fail.
+r = client.delete(f"/api/plan/{plan_id}")
+assert r.status_code == 204, r.text
+assert client.get(f"/api/plan/{plan_id}/events").status_code == 404
+assert client.delete(f"/api/plan/{plan_id}").status_code == 404
+print("[ok] DELETE plan -> clean user-test reset")
 
 # Error paths.
 assert client.get("/api/plan/nope/events").status_code == 404
