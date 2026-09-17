@@ -1,0 +1,17 @@
+.git/
+.github/
+.kiro/
+.agents/
+.venv/
+.vercel/
+android-companion/
+artifacts/
+data/
+scripts/
+.env
+*.db
+*.db-*
+**/__pycache__/
+**/*.py[cod]
+web/node_modules/
+web/dist/

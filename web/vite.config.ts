@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 
-const apiTarget = process.env.STUDYGRID_API_TARGET ?? 'http://127.0.0.1:8000'
+const apiTarget = process.env.STUDYGRID_API_TARGET ?? 'http://127.0.0.1:8001'
 
 export default defineConfig({
   plugins: [svelte()],

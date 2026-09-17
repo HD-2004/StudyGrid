@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time
 from enum import Enum
 from math import ceil
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -139,6 +140,95 @@ class ActivityLog(BaseModel):
     source_id: str | None = Field(default=None, max_length=200)
     plan_id: str | None = Field(default=None, max_length=100)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class HealthConnectionStatus(str, Enum):
+    connected = "connected"
+    paused = "paused"
+
+
+class ReadinessStatus(str, Enum):
+    insufficient_data = "insufficient_data"
+    ready = "ready"
+    reduce_load = "reduce_load"
+    recovery = "recovery"
+
+
+class HealthPairing(BaseModel):
+    """Short-lived, one-use link between the browser plan and Android."""
+
+    code_hash: str = Field(min_length=64, max_length=64)
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class HealthConnection(BaseModel):
+    """Revocable companion credential metadata; the raw token is never stored."""
+
+    provider: Literal["health_connect"] = "health_connect"
+    status: HealthConnectionStatus = HealthConnectionStatus.connected
+    token_hash: str = Field(min_length=64, max_length=64)
+    paired_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_synced_at: datetime | None = None
+    permissions: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+
+
+class DailyHealthSummary(BaseModel):
+    """Privacy-minimised daily aggregate received from Health Connect.
+
+    StudyGrid deliberately does not accept or retain raw heart-rate samples.
+    """
+
+    occurred_on: date
+    sleep_minutes: int | None = Field(default=None, ge=0, le=1_440)
+    sleep_start: datetime | None = None
+    sleep_end: datetime | None = None
+    resting_heart_rate_bpm: float | None = Field(default=None, ge=20, le=250)
+    hrv_rmssd_ms: float | None = Field(default=None, ge=0, le=500)
+    energy_level: int | None = Field(default=None, ge=1, le=5)
+    feels_unwell: bool | None = None
+    source_devices: list[str] = Field(default_factory=list)
+    synced_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def _check_sleep_interval(self) -> DailyHealthSummary:
+        if self.sleep_start and self.sleep_end and self.sleep_start >= self.sleep_end:
+            raise ValueError("sleep_start must precede sleep_end")
+        return self
+
+
+class ReadinessFactor(BaseModel):
+    key: str
+    label: str
+    impact: Literal["positive", "neutral", "negative"]
+    detail: str
+
+
+class ReadinessAssessment(BaseModel):
+    occurred_on: date
+    status: ReadinessStatus
+    capacity_percent: int = Field(ge=0, le=100)
+    confidence: Literal["low", "medium", "high"]
+    factors: list[ReadinessFactor] = Field(default_factory=list)
+    baseline_days: int = Field(default=0, ge=0)
+    sleep_baseline_minutes: float | None = None
+    resting_hr_baseline_bpm: float | None = None
+    hrv_baseline_rmssd_ms: float | None = None
+    disclaimer: str = (
+        "General wellness guidance only — not a diagnosis or medical advice."
+    )
+
+
+class HealthScheduleRecommendation(BaseModel):
+    id: str
+    kind: Literal["protect", "shorten_move", "recovery_break", "no_change"]
+    title: str
+    detail: str
+    session_id: str | None = None
+    protected: bool = False
+    keep_minutes: int = Field(default=0, ge=0)
+    defer_minutes: int = Field(default=0, ge=0)
 
 
 class Topic(BaseModel):
@@ -300,6 +390,14 @@ class PlanChange(BaseModel):
     session_id: str | None = None
     moved_from: datetime | None = None
     moved_to: datetime | None = None
+
+
+class HealthAdjustmentLog(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    occurred_on: date
+    readiness_status: ReadinessStatus
+    changes: list[PlanChange] = Field(default_factory=list)
+    applied_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ReasonCount(BaseModel):

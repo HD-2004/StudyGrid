@@ -11,6 +11,9 @@ import type {
   CoachResponse,
   Completion,
   Insights,
+  HealthDashboard,
+  HealthPairingResponse,
+  HealthScheduleApplyResponse,
   MaterialAnalyzeResponse,
   MissReason,
   PlanRequest,
@@ -238,6 +241,66 @@ export function sendCoachMessage(
       message,
       session_id: sessionId,
     }),
+  })
+}
+
+export function getHealthDashboard(
+  planId: string,
+  days: 7 | 30 = 7,
+  end?: string,
+): Promise<HealthDashboard> {
+  const query = new URLSearchParams({ plan_id: planId, days: String(days) })
+  if (end) query.set('end', end)
+  return request<HealthDashboard>(`/health/dashboard?${query.toString()}`)
+}
+
+export function createHealthPairing(planId: string): Promise<HealthPairingResponse> {
+  return request<HealthPairingResponse>('/health/pairing', {
+    method: 'POST',
+    body: JSON.stringify({ plan_id: planId }),
+  })
+}
+
+export function saveHealthCheckIn(
+  planId: string,
+  occurredOn: string,
+  energyLevel: number,
+  feelsUnwell: boolean,
+): Promise<HealthDashboard> {
+  return request<HealthDashboard>('/health/check-in', {
+    method: 'POST',
+    body: JSON.stringify({
+      plan_id: planId,
+      occurred_on: occurredOn,
+      energy_level: energyLevel,
+      feels_unwell: feelsUnwell,
+    }),
+  })
+}
+
+export function setHealthSyncPaused(
+  planId: string,
+  paused: boolean,
+): Promise<HealthDashboard> {
+  return request<HealthDashboard>(`/health/connection/${paused ? 'pause' : 'resume'}`, {
+    method: 'POST',
+    body: JSON.stringify({ plan_id: planId }),
+  })
+}
+
+export async function deleteHealthConnection(planId: string): Promise<void> {
+  await request<void>(`/health/connection?plan_id=${encodeURIComponent(planId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function applyHealthSchedule(
+  planId: string,
+  occurredOn: string,
+): Promise<HealthScheduleApplyResponse> {
+  return request<HealthScheduleApplyResponse>('/health/schedule/apply', {
+    method: 'POST',
+    body: JSON.stringify({ plan_id: planId, occurred_on: occurredOn }),
   })
 }
 

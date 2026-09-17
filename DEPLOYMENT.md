@@ -88,3 +88,37 @@ $env:STUDYGRID_BASE_URL='https://your-deployment.example'
 - [ ] No secrets are present in the image, repository, logs, or browser bundle.
 - [ ] User testers are told that data expires, is browser-scoped, and is not
       available across devices.
+
+## Vercel
+
+The repository includes a Vite build and a FastAPI ASGI function under
+`api/index.py`. Import the repository in Vercel with the project root left at
+the repository root; `vercel.json` supplies the install, build, output, and
+same-origin routing settings.
+
+Configure these variables for Production and Preview:
+
+```text
+ENVIRONMENT=production
+SESSION_SECRET=<stable random secret of at least 32 bytes>
+SESSION_COOKIE_SECURE=true
+LLM_PROVIDER=fallback
+```
+
+To enable OpenAI-backed analysis and coaching, change `LLM_PROVIDER` to
+`openai` and add `OPENAI_API_KEY`, `OPENAI_MODEL`, and
+`OPENAI_TRANSCRIPTION_MODEL`.
+
+Do not set `STUDYGRID_DB_PATH` on Vercel. Vercel Functions do not provide a
+persistent shared filesystem, so the current fallback is intentionally
+process-local and disposable there. This is suitable only for a short demo:
+plans may disappear after a cold start or be unavailable on another function
+instance. Durable Vercel deployment requires a managed database implementation
+of `PlanRepository` before public user testing.
+
+After deployment, run the production smoke against the assigned domain:
+
+```powershell
+$env:STUDYGRID_BASE_URL='https://your-project.vercel.app'
+.\.venv\Scripts\python.exe scripts\smoke_production.py
+```

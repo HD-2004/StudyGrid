@@ -70,7 +70,7 @@ async def security_headers(request: Request, call_next):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "api_version": "2026-09-health-1"}
 
 
 # A production container copies the Vite build here. Mounting it after API and

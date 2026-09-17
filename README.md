@@ -12,7 +12,10 @@ an adaptive study calendar with spaced reviews.
 - DOCX, TXT, Markdown, PDF, public-URL, and video/audio material ingestion
 - Progress charts for study, work, entertainment, illness, unexpected events,
   rest, and custom labels
+- Health Connect daily aggregates, explainable readiness, and deadline-safe
+  workload adaptation
 - Svelte 5, Vite, TypeScript, and Schedule-X frontend
+- Kotlin/Jetpack Compose Android companion in `android-companion/`
 - Project-local LearnHarness design workflow and deterministic UI detector
 
 ## Local setup
@@ -25,7 +28,7 @@ LearnHarness workflow; the installed files do not become a browser dependency.
 
 ```powershell
 py -3.14 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --only-binary=:all: -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install --only-binary=:all: -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m playwright install chromium
 Copy-Item .env.example .env
 Set-Location web
@@ -63,12 +66,12 @@ npm run dev -- --port 5175 --api-port 8001
 ```
 
 For separate terminals, start the API with
-`.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload`, then run
+`.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8001`, then run
 `npm run dev:web -- --port 5173`. The combined root command is recommended
 because it prevents the frontend from starting against an unavailable API.
 
-Open `http://127.0.0.1:5173`. The API runs at `http://127.0.0.1:8000`, and its
-interactive documentation is available at `http://127.0.0.1:8000/docs`.
+Open `http://127.0.0.1:5173`. The API runs at `http://127.0.0.1:8001`, and its
+interactive documentation is available at `http://127.0.0.1:8001/docs`.
 
 ## Verify
 
@@ -83,6 +86,7 @@ Backend checks:
 .\.venv\Scripts\python.exe scripts\smoke_persistence.py
 .\.venv\Scripts\python.exe scripts\smoke_materials.py
 .\.venv\Scripts\python.exe scripts\smoke_activities.py
+.\.venv\Scripts\python.exe scripts\smoke_health.py
 ```
 
 Frontend checks:
@@ -104,6 +108,18 @@ root:
 The browser test covers plan creation, calendar rendering, Study Coach,
 progress entry, adaptation, time-use insights, reset, dark mode, mobile layout,
 keyboard behavior, and automated WCAG A/AA checks.
+
+Android companion build (JDK 17+ and Android SDK 36):
+
+```powershell
+Set-Location android-companion
+.\gradlew.bat :app:assembleDebug
+```
+
+In Progress → Health, generate a one-time pairing code. Enter that code and the
+StudyGrid API address in the companion, grant Health Connect access, and sync.
+Only daily sleep/resting-HR/HRV aggregates are sent; raw heart-rate samples stay
+on the device. Release builds require HTTPS.
 
 ## Deploy for user testing
 

@@ -18,7 +18,9 @@ from app.main import app
 client = TestClient(app)
 START = date(2026, 9, 21)
 
-assert client.get("/health").json() == {"status": "ok"}
+health = client.get("/health")
+assert health.status_code == 200, f"{health.status_code}: {health.text}"
+assert health.json()["status"] == "ok"
 print("[ok] health")
 
 # Material analysis must remain useful with no network or API key.

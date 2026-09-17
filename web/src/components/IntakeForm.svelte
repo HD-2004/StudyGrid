@@ -7,14 +7,20 @@
     analyzeMaterialUrl,
     ApiError,
   } from '../lib/api'
+  import {
+    deriveAvailabilityTotals,
+    toPlanRequest,
+    validateSetupStep,
+    type DailyHours,
+    type MaterialAnalysisState,
+    type PlanDraft,
+  } from '../lib/setup-state'
   import type { AnalyzeResponse, MaterialAnalyzeResponse, PlanRequest, Subject } from '../lib/types'
 
-  type AnalysisState = {
-    busy: boolean
-    source: 'ai' | 'fallback' | null
-    message: string | null
-    error: string | null
-  }
+  type AnalysisState = Pick<
+    MaterialAnalysisState,
+    'busy' | 'source' | 'message' | 'error'
+  >
 
   let {
     busy,
@@ -23,6 +29,15 @@
 
   let formError = $state<string | null>(null)
   let request = $state<PlanRequest>(newRequest())
+  let dailyHoursDraft = $state<DailyHours>({
+    '0': 2,
+    '1': 2,
+    '2': 2,
+    '3': 2,
+    '4': 2,
+    '5': 1,
+    '6': 1,
+  })
   let materialDrafts = $state<string[]>([''])
   let materialFiles = $state<(File | null)[]>([null])
   let materialUrls = $state<string[]>([''])
@@ -210,33 +225,55 @@
 
   const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-  const totalWeeklyHours = $derived(
-    Object.values(request.availability.weekday_minutes).reduce((a, b) => a + Number(b), 0) / 60,
+  const availabilityTotals = $derived(
+    deriveAvailabilityTotals(dailyHoursDraft, request.availability.session_length_minutes),
   )
-  const activeStudyDays = $derived(
-    Object.values(request.availability.weekday_minutes).filter((minutes) => Number(minutes) > 0).length,
-  )
+  const totalWeeklyHours = $derived(availabilityTotals.weeklyHours)
+  const activeStudyDays = $derived(availabilityTotals.activeStudyDays)
   const shortStudyDays = $derived(
-    DAYS.filter((_, index) => {
-      const minutes = Number(request.availability.weekday_minutes[String(index)] ?? 0)
-      return minutes > 0 && minutes < request.availability.session_length_minutes
-    }),
+    availabilityTotals.shortDayKeys.map((key) => DAYS[Number(key)]),
   )
-  const shortBreakMinutes = $derived(Math.ceil(request.availability.session_length_minutes * 0.10))
+  const shortBreakMinutes = $derived(availabilityTotals.shortBreakMinutes)
 
   function dailyHours(index: number): number {
-    return Number(request.availability.weekday_minutes[String(index)] ?? 0) / 60
+    return dailyHoursDraft[String(index) as keyof DailyHours]
   }
 
   function setDailyHours(index: number, hours: number) {
     if (!Number.isFinite(hours)) return
-    request.availability.weekday_minutes[String(index)] = Math.round(hours * 60)
+    dailyHoursDraft[String(index) as keyof DailyHours] = hours
   }
 
-  const valid = $derived(
-    request.subjects.length > 0 &&
-      request.subjects.every((s) => s.name.trim() && s.topics.some((t) => t.name.trim())),
-  )
+  function planDraft(): PlanDraft {
+    const plain = $state.snapshot(request) as PlanRequest
+    const materials: MaterialAnalysisState[] = plain.subjects.map((_, index) => ({
+      text: materialDrafts[index] ?? '',
+      url: materialUrls[index] ?? '',
+      file: materialFiles[index] ?? null,
+      busy: analysisStates[index]?.busy ?? false,
+      source: analysisStates[index]?.source ?? null,
+      truncated: false,
+      message: analysisStates[index]?.message ?? null,
+      error: analysisStates[index]?.error ?? null,
+    }))
+    return {
+      subjects: plain.subjects,
+      materials,
+      availability: {
+        weekday_hours: $state.snapshot(dailyHoursDraft) as DailyHours,
+        earliest: plain.availability.earliest,
+        latest: plain.availability.latest,
+        session_length_minutes: plain.availability.session_length_minutes,
+        long_break_minutes: plain.availability.long_break_minutes,
+        busy: plain.availability.busy,
+      },
+      start_date: plain.start_date,
+      strategy: plain.strategy,
+      notes: plain.notes,
+    }
+  }
+
+  const valid = $derived(validateSetupStep('review', planDraft()).valid)
 
   function submit(form: HTMLFormElement) {
     // Native validation blocks submission without showing anything in some
@@ -252,19 +289,14 @@
     }
     formError = null
 
-    // $state.snapshot unwraps the reactive proxy into a plain object, which is
-    // what JSON.stringify in the api layer needs.
-    const plain = $state.snapshot(request) as PlanRequest
-
-    // Drop blank rows the student left behind.
-    const cleaned: PlanRequest = {
-      ...plain,
-      strategy: 'fresh',
-      subjects: plain.subjects
-        .filter((s) => s.name.trim())
-        .map((s) => ({ ...s, topics: s.topics.filter((t) => t.name.trim()) })),
+    const draft = planDraft()
+    const validation = validateSetupStep('review', draft)
+    if (!validation.valid) {
+      formError = `Check that field: ${validation.firstInvalidFieldId}`
+      document.getElementById(validation.firstInvalidFieldId ?? '')?.focus()
+      return
     }
-    onSubmit(cleaned)
+    onSubmit(toPlanRequest(draft))
   }
 </script>
 
@@ -403,7 +435,7 @@
           <tbody>
             {#each subject.topics as topic, ti (ti)}
               <tr>
-                <td><input type="text" bind:value={topic.name} placeholder="Topic name" aria-label={`Topic ${ti + 1} name`} /></td>
+                <td><input id={`topic-${si}-${ti}`} type="text" bind:value={topic.name} placeholder="Topic name" aria-label={`Topic ${ti + 1} name`} /></td>
                 <td>
                   <select bind:value={topic.difficulty} aria-label={`Difficulty for ${topic.name || `topic ${ti + 1}`}`}>
                     <option value="easy">Easy</option>
@@ -414,7 +446,7 @@
                 <!-- step=5, not 15: a 100-minute topic is a normal estimate, and a
                      coarser step makes such values fail native validation, which
                      blocks submit with no visible message. -->
-                <td><input type="number" min="15" max="600" step="5" bind:value={topic.estimated_minutes} aria-label={`Minutes for ${topic.name || `topic ${ti + 1}`}`} /></td>
+                <td><input id={`topic-minutes-${si}-${ti}`} type="number" min="15" max="600" step="5" bind:value={topic.estimated_minutes} aria-label={`Minutes for ${topic.name || `topic ${ti + 1}`}`} /></td>
                 <td>
                   <button
                     type="button"

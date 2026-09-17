@@ -74,6 +74,7 @@ with TemporaryDirectory(prefix="studygrid-") as directory:
             assert privacy.status_code == 200, privacy.text
             assert privacy.json() == {
                 "anonymous_session": True,
+                "api_version": "2026-09-health-1",
                 "durable_storage": True,
                 "retention_days": 14,
             }

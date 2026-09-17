@@ -28,7 +28,7 @@ def main() -> None:
     with httpx.Client(base_url=BASE_URL, timeout=TIMEOUT_SECONDS, follow_redirects=True) as client:
         health = client.get("/health")
         health.raise_for_status()
-        assert health.json() == {"status": "ok"}
+        assert health.json()["status"] == "ok"
 
         page = client.get("/")
         page.raise_for_status()

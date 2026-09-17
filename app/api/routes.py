@@ -6,13 +6,21 @@ that decides *when* something is studied belongs in app/scheduler.py.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+import hashlib
+import secrets
+from datetime import UTC, date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Response, UploadFile
 
 from ..activity import summarize_activities
 from ..ai import MaterialAnalyzer, StudyCoach, build_analyzer_from_env, build_coach_from_env
 from ..insights import build_insights
+from ..health import (
+    apply_health_adjustment,
+    assess_readiness,
+    health_policy,
+    schedule_recommendations,
+)
 from ..materials import MaterialError, extract_upload, extract_url, max_upload_bytes, prepare_for_analysis
 from ..models import (
     ActivityCategory,
@@ -21,6 +29,11 @@ from ..models import (
     ChatMessage,
     ChatRole,
     Completion,
+    DailyHealthSummary,
+    HealthAdjustmentLog,
+    HealthConnection,
+    HealthConnectionStatus,
+    HealthPairing,
     Insights,
     MISS_REASON_LABELS,
     MissReason,
@@ -50,6 +63,19 @@ from .schemas import (
     CalendarEvent,
     CoachRequest,
     CoachResponse,
+    HealthCheckInRequest,
+    HealthConnectionView,
+    HealthDashboardResponse,
+    HealthPairingClaimRequest,
+    HealthPairingClaimResponse,
+    HealthPairingRequest,
+    HealthPairingResponse,
+    HealthPlanRequest,
+    HealthPolicyResponse,
+    HealthScheduleApplyRequest,
+    HealthScheduleApplyResponse,
+    HealthSyncRequest,
+    HealthSyncResponse,
     MaterialAnalyzeResponse,
     MaterialUrlRequest,
     PlanResponse,
@@ -93,6 +119,66 @@ def _response_for(record: PlanRecord) -> PlanResponse:
         summary=record.plan.summary,
         warnings=record.plan.warnings,
         unscheduled=record.plan.unscheduled,
+    )
+
+
+def _secret_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _normalise_pairing_code(value: str) -> str:
+    return value.strip().upper().replace("-", "")
+
+
+def _record_for_health_token(
+    authorization: str | None, repo: PlanRepository
+) -> tuple[str, PlanRecord]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="A companion access token is required.")
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="A companion access token is required.")
+    found = repo.find_by_health_token(_secret_hash(token))
+    if found is None:
+        raise HTTPException(status_code=401, detail="The companion token is invalid or revoked.")
+    return found
+
+
+def _health_dashboard_for(
+    record: PlanRecord, days: int, end: date
+) -> HealthDashboardResponse:
+    policy = health_policy()
+    start = end - timedelta(days=days - 1)
+    visible = sorted(
+        (item for item in record.health_summaries if start <= item.occurred_on <= end),
+        key=lambda item: item.occurred_on,
+    )
+    readiness = assess_readiness(record.health_summaries, end, policy)
+    connection = (
+        HealthConnectionView.model_validate(
+            record.health_connection.model_dump(exclude={"token_hash"})
+        )
+        if record.health_connection
+        else None
+    )
+    return HealthDashboardResponse(
+        plan_id=record.plan_id,
+        connection=connection,
+        summaries=visible,
+        readiness=readiness,
+        recommendations=schedule_recommendations(record, readiness, end),
+        adjustments=sorted(
+            (
+                item
+                for item in record.health_adjustments
+                if start <= item.occurred_on <= end
+            ),
+            key=lambda item: item.applied_at,
+            reverse=True,
+        ),
+        policy=HealthPolicyResponse.model_validate(
+            policy.model_dump(exclude={"pairing_ttl_minutes"})
+        ),
     )
 
 
@@ -233,6 +319,7 @@ def create_plan(
         plan=plan,
         availability=request.availability,
         exam_dates={subject.name: subject.exam_date for subject in request.subjects},
+        subject_priorities={subject.name: subject.priority for subject in request.subjects},
         allocator=allocator,
     )
     repo.save(record, owner_id)
@@ -717,6 +804,211 @@ def delete_activity(
             detail="Study-session time is removed by changing that session's progress.",
         )
     repo.delete_activity(activity_id, owner_id)
+
+
+@router.post("/health/pairing", response_model=HealthPairingResponse)
+def create_health_pairing(
+    request: HealthPairingRequest,
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> HealthPairingResponse:
+    """Create a short-lived, one-use code for the Android companion."""
+    record = repo.load(request.plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    code = "".join(secrets.choice(alphabet) for _ in range(8))
+    policy = health_policy()
+    expires_at = datetime.now(UTC) + timedelta(minutes=policy.pairing_ttl_minutes)
+    record.health_pairing = HealthPairing(
+        code_hash=_secret_hash(code), expires_at=expires_at
+    )
+    repo.save(record, owner_id)
+    return HealthPairingResponse(
+        plan_id=record.plan_id,
+        code=f"{code[:4]}-{code[4:]}",
+        expires_at=expires_at,
+    )
+
+
+@router.post("/health/pairing/claim", response_model=HealthPairingClaimResponse)
+def claim_health_pairing(
+    request: HealthPairingClaimRequest,
+    repo: PlanRepository = Depends(get_repo),
+) -> HealthPairingClaimResponse:
+    """Exchange a one-use code for a revocable companion bearer token."""
+    code = _normalise_pairing_code(request.code)
+    found = repo.find_by_health_pairing(_secret_hash(code))
+    if found is None:
+        raise HTTPException(status_code=404, detail="Pairing code is invalid or expired.")
+    owner_id, record = found
+    token = secrets.token_urlsafe(32)
+    record.health_connection = HealthConnection(token_hash=_secret_hash(token))
+    record.health_pairing = None
+    repo.save(record, owner_id)
+    return HealthPairingClaimResponse(plan_id=record.plan_id, access_token=token)
+
+
+@router.post("/health/sync", response_model=HealthSyncResponse)
+def sync_health_connect(
+    request: HealthSyncRequest,
+    authorization: str | None = Header(default=None),
+    repo: PlanRepository = Depends(get_repo),
+) -> HealthSyncResponse:
+    """Accept daily aggregates from the paired companion, never raw HR samples."""
+    owner_id, record = _record_for_health_token(authorization, repo)
+    connection = record.health_connection
+    if connection is None:
+        raise HTTPException(status_code=401, detail="The companion connection was revoked.")
+    if connection.status is HealthConnectionStatus.paused:
+        raise HTTPException(status_code=409, detail="Health sync is paused in StudyGrid.")
+    now = datetime.now(UTC)
+    by_date = {item.occurred_on: item for item in record.health_summaries}
+    for summary in request.summaries:
+        by_date[summary.occurred_on] = summary.model_copy(update={"synced_at": now})
+    cutoff = date.today() - timedelta(days=health_policy().retention_days - 1)
+    record.health_summaries = sorted(
+        (item for day, item in by_date.items() if day >= cutoff),
+        key=lambda item: item.occurred_on,
+    )
+    record.health_connection = connection.model_copy(update={
+        "last_synced_at": now,
+        "permissions": sorted(set(request.permissions)),
+        "sources": sorted(set(request.sources)),
+    })
+    repo.save(record, owner_id)
+    return HealthSyncResponse(accepted_days=len(request.summaries), last_synced_at=now)
+
+
+@router.get("/health/dashboard", response_model=HealthDashboardResponse)
+def get_health_dashboard(
+    plan_id: str = Query(min_length=1, max_length=100),
+    days: int = Query(default=7),
+    end: date | None = Query(default=None),
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> HealthDashboardResponse:
+    if days not in {7, 30}:
+        raise HTTPException(status_code=422, detail="days must be 7 or 30.")
+    record = repo.load(plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    return _health_dashboard_for(record, days, end or date.today())
+
+
+@router.post("/health/check-in", response_model=HealthDashboardResponse)
+def save_health_check_in(
+    request: HealthCheckInRequest,
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> HealthDashboardResponse:
+    record = repo.load(request.plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    existing = next(
+        (item for item in record.health_summaries if item.occurred_on == request.occurred_on),
+        None,
+    )
+    if existing:
+        updated = existing.model_copy(update={
+            "energy_level": request.energy_level,
+            "feels_unwell": request.feels_unwell,
+            "synced_at": datetime.now(UTC),
+        })
+        record.health_summaries = [
+            updated if item.occurred_on == request.occurred_on else item
+            for item in record.health_summaries
+        ]
+    else:
+        record.health_summaries.append(DailyHealthSummary(
+            occurred_on=request.occurred_on,
+            energy_level=request.energy_level,
+            feels_unwell=request.feels_unwell,
+        ))
+    record.health_summaries.sort(key=lambda item: item.occurred_on)
+    repo.save(record, owner_id)
+    return _health_dashboard_for(record, 7, request.occurred_on)
+
+
+@router.post("/health/connection/pause", response_model=HealthDashboardResponse)
+def pause_health_connection(
+    request: HealthPlanRequest,
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> HealthDashboardResponse:
+    record = repo.load(request.plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    if record.health_connection is None:
+        raise HTTPException(status_code=409, detail="Health Connect is not connected.")
+    record.health_connection = record.health_connection.model_copy(
+        update={"status": HealthConnectionStatus.paused}
+    )
+    repo.save(record, owner_id)
+    return _health_dashboard_for(record, 7, date.today())
+
+
+@router.post("/health/connection/resume", response_model=HealthDashboardResponse)
+def resume_health_connection(
+    request: HealthPlanRequest,
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> HealthDashboardResponse:
+    record = repo.load(request.plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    if record.health_connection is None:
+        raise HTTPException(status_code=409, detail="Health Connect is not connected.")
+    record.health_connection = record.health_connection.model_copy(
+        update={"status": HealthConnectionStatus.connected}
+    )
+    repo.save(record, owner_id)
+    return _health_dashboard_for(record, 7, date.today())
+
+
+@router.delete("/health/connection", status_code=204)
+def delete_health_connection(
+    plan_id: str = Query(min_length=1, max_length=100),
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> None:
+    record = repo.load(plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    record.health_pairing = None
+    record.health_connection = None
+    record.health_summaries = []
+    record.health_adjustments = []
+    repo.save(record, owner_id)
+
+
+@router.post("/health/schedule/apply", response_model=HealthScheduleApplyResponse)
+def apply_health_schedule(
+    request: HealthScheduleApplyRequest,
+    repo: PlanRepository = Depends(get_repo),
+    owner_id: str = Depends(get_owner_id),
+) -> HealthScheduleApplyResponse:
+    """Apply the previewed low-readiness plan only after browser confirmation."""
+    record = repo.load(request.plan_id, owner_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    readiness = assess_readiness(record.health_summaries, request.occurred_on)
+    changes = apply_health_adjustment(record, readiness, request.occurred_on)
+    if changes:
+        record.health_adjustments.append(HealthAdjustmentLog(
+            occurred_on=request.occurred_on,
+            readiness_status=readiness.status,
+            changes=changes,
+        ))
+        record.health_adjustments = record.health_adjustments[-50:]
+    repo.save(record, owner_id)
+    return HealthScheduleApplyResponse(
+        sessions=record.plan.sessions,
+        changes=changes,
+        unscheduled=record.plan.unscheduled,
+        readiness=readiness,
+        recommendations=schedule_recommendations(record, readiness, request.occurred_on),
+    )
 
 
 @router.get("/privacy", response_model=PrivacyResponse)

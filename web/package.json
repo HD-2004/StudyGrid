@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "node ../scripts/dev.mjs",
     "dev:vite": "vite",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
-    "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
+    "check:boundaries": "node --test scripts/check-frontend-boundaries.test.mjs && node scripts/check-frontend-boundaries.mjs",
+    "check": "npm run check:boundaries && svelte-check --tsconfig ./tsconfig.json",
+    "build": "npm run check:boundaries && svelte-check --tsconfig ./tsconfig.json && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

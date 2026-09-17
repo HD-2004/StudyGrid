@@ -112,6 +112,57 @@ without exposing plans across browsers or losing all data on every restart.
 - [ ] Concept relationship graph
 - [ ] Pitch deck via the `pptx` skill
 
+## Phase 6 — Health-aware planning (in progress)
+
+Product boundary: this feature gives general wellness and workload guidance; it
+does not diagnose illness or replace medical advice. Health data stays scoped to
+the same anonymous owner as the study plan, and raw heart-rate samples are not
+stored.
+
+### Phase 6A — Health domain and private sync API
+
+- [ ] Add Health Connect connection, daily summary, and readiness models
+- [ ] Pair the browser with one Android companion using a short-lived code
+- [ ] Accept sleep, resting-heart-rate, and optional HRV daily summaries
+- [ ] Store only daily aggregates with source and last-sync metadata
+- [ ] Support pause, disconnect, and delete-health-data controls
+
+### Phase 6B — Readiness engine
+
+- [ ] Build a personal 7-day baseline when enough history is available
+- [ ] Return one of: insufficient data, ready, reduce load, or recovery
+- [ ] Explain every status using sleep/heart-rate/HRV factors and confidence
+- [ ] Keep thresholds and capacity multipliers configurable on the backend
+- [ ] Keep deadline risk and explicit task priority as hard scheduling constraints
+
+### Phase 6C — Progress dashboard and calendar signal
+
+- [ ] Add health/readiness cards and 7/30-day charts only to Progress
+- [ ] Show a compact today's-readiness badge in Calendar
+- [ ] Add Health Connect pairing, sync metadata, check-in, pause, and delete UI
+- [ ] Show schedule recommendations before the user applies any change
+- [ ] Preserve responsive, keyboard, dark-theme, and empty/error states
+
+### Phase 6D — Health-aware schedule adaptation
+
+- [ ] Protect overdue, near-deadline, high-priority, and prerequisite work
+- [ ] On lower-readiness days, shorten/split flexible blocks and add recovery gaps
+- [ ] Move only lower-priority work and keep unscheduled remainders visible
+- [ ] Require confirmation before exceeding capacity or applying health changes
+- [ ] Record every health-driven change for Progress analytics and explanation
+
+### Phase 6E — Android Health Connect companion
+
+- [ ] Create a Kotlin/Jetpack Compose companion for Android 9+
+- [ ] Request Health Connect permissions with an explicit disclosure screen
+- [ ] Sync sleep sessions, resting heart rate, and HRV when the device provides it
+- [ ] Pair by one-time code without exposing the browser session cookie
+- [ ] Support manual sync, background sync, revocation, and clear error states
+
+Phase 6 acceptance checkpoint: an Android tester can pair one device, sync daily
+health aggregates, see an explainable readiness state in Progress, preview a
+deadline-safe lighter schedule, and explicitly apply it without losing work.
+
 ## Cut list, in order
 
 The concept graph, named/cross-device accounts, and the pitch deck. The public
@@ -120,6 +171,10 @@ user-test flow works without all three.
 ## Open decisions
 
 1. Anonymous sessions isolate public testers but do not provide named accounts
-   or cross-device recovery. Decide whether either is required after testing.
-2. Decide whether the concept graph or pitch polish creates more judging value.
-3. The current worktree still needs a reviewed commit before deployment.
+   or cross-device recovery. The Android companion therefore pairs to one
+   anonymous plan with a revocable token for the MVP.
+2. Health Connect is the only wearable ecosystem in Phase 6. Apple Health and
+   direct vendor integrations remain out of scope until the Android flow is
+   validated.
+3. Decide whether the concept graph or pitch polish creates more judging value.
+4. The current worktree still needs a reviewed commit before deployment.

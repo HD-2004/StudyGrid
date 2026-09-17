@@ -5,3 +5,5 @@ INFO:     Started server process [37812]
 INFO:     Waiting for application startup.
 SESSION_SECRET is not configured; anonymous sessions will reset on restart.
 INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'app\models.py'. Reloading...
+[StudyGrid] API stopped unexpectedly with exit code 4294967295.

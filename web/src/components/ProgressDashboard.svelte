@@ -15,8 +15,17 @@
     ActivityInput,
     ActivityLog,
   } from '../lib/types'
+  import HealthReadiness from './HealthReadiness.svelte'
 
-  let { onClose }: { onClose: () => void } = $props()
+  let {
+    planId,
+    onClose,
+    onScheduleChanged,
+  }: {
+    planId: string
+    onClose: () => void
+    onScheduleChanged: () => void | Promise<void>
+  } = $props()
 
   const COLOR: Record<ActivityCategory, string> = {
     study: 'var(--activity-study)',
@@ -231,6 +240,8 @@
       30 days
     </button>
   </div>
+
+  <HealthReadiness {planId} {days} onChanged={onScheduleChanged} />
 
   {#if cancelledActivities.length}
     <section class="cancellation-summary" aria-label="Cancelled work">

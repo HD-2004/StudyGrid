@@ -14,7 +14,16 @@ from typing import Protocol
 
 from dotenv import load_dotenv
 
-from ..models import ActivityLog, Availability, ChatMessage, StudyPlan
+from ..models import (
+    ActivityLog,
+    Availability,
+    ChatMessage,
+    DailyHealthSummary,
+    HealthAdjustmentLog,
+    HealthConnection,
+    HealthPairing,
+    StudyPlan,
+)
 from ..scheduler import TimeAllocator
 
 
@@ -29,6 +38,11 @@ class PlanRecord:
     allocator: TimeAllocator
     session_ids: dict[str, int] = field(default_factory=dict)
     chat_history: list[ChatMessage] = field(default_factory=list)
+    subject_priorities: dict[str, int] = field(default_factory=dict)
+    health_pairing: HealthPairing | None = None
+    health_connection: HealthConnection | None = None
+    health_summaries: list[DailyHealthSummary] = field(default_factory=list)
+    health_adjustments: list[HealthAdjustmentLog] = field(default_factory=list)
 
 
 class PlanRepository(Protocol):
@@ -42,6 +56,10 @@ class PlanRepository(Protocol):
     def load(self, plan_id: str, owner_id: str) -> PlanRecord | None: ...
 
     def latest(self, owner_id: str) -> PlanRecord | None: ...
+
+    def find_by_health_pairing(self, code_hash: str) -> tuple[str, PlanRecord] | None: ...
+
+    def find_by_health_token(self, token_hash: str) -> tuple[str, PlanRecord] | None: ...
 
     def delete(self, plan_id: str, owner_id: str) -> bool: ...
 
@@ -84,6 +102,21 @@ class InMemoryRepository:
     def latest(self, owner_id: str) -> PlanRecord | None:
         owned = [entry for entry in self._records.values() if entry[0] == owner_id]
         return max(owned, key=lambda entry: entry[2])[1] if owned else None
+
+    def find_by_health_pairing(self, code_hash: str) -> tuple[str, PlanRecord] | None:
+        now = datetime.now(UTC)
+        for owner_id, record, _ in self._records.values():
+            pairing = record.health_pairing
+            if pairing and pairing.code_hash == code_hash and pairing.expires_at > now:
+                return owner_id, record
+        return None
+
+    def find_by_health_token(self, token_hash: str) -> tuple[str, PlanRecord] | None:
+        for owner_id, record, _ in self._records.values():
+            connection = record.health_connection
+            if connection and connection.token_hash == token_hash:
+                return owner_id, record
+        return None
 
     def delete(self, plan_id: str, owner_id: str) -> bool:
         stored = self._records.get(plan_id)
@@ -251,6 +284,25 @@ class SqliteRepository:
                 "chat_history": [
                     message.model_dump(mode="json") for message in record.chat_history
                 ],
+                "subject_priorities": record.subject_priorities,
+                "health_pairing": (
+                    record.health_pairing.model_dump(mode="json")
+                    if record.health_pairing
+                    else None
+                ),
+                "health_connection": (
+                    record.health_connection.model_dump(mode="json")
+                    if record.health_connection
+                    else None
+                ),
+                "health_summaries": [
+                    summary.model_dump(mode="json")
+                    for summary in record.health_summaries
+                ],
+                "health_adjustments": [
+                    adjustment.model_dump(mode="json")
+                    for adjustment in record.health_adjustments
+                ],
             },
             separators=(",", ":"),
         )
@@ -274,6 +326,28 @@ class SqliteRepository:
             chat_history=[
                 ChatMessage.model_validate(message)
                 for message in raw.get("chat_history", [])
+            ],
+            subject_priorities={
+                subject: int(priority)
+                for subject, priority in raw.get("subject_priorities", {}).items()
+            },
+            health_pairing=(
+                HealthPairing.model_validate(raw["health_pairing"])
+                if raw.get("health_pairing")
+                else None
+            ),
+            health_connection=(
+                HealthConnection.model_validate(raw["health_connection"])
+                if raw.get("health_connection")
+                else None
+            ),
+            health_summaries=[
+                DailyHealthSummary.model_validate(summary)
+                for summary in raw.get("health_summaries", [])
+            ],
+            health_adjustments=[
+                HealthAdjustmentLog.model_validate(adjustment)
+                for adjustment in raw.get("health_adjustments", [])
             ],
         )
 
@@ -337,6 +411,36 @@ class SqliteRepository:
                 (owner_id,),
             ).fetchone()
         return self._decode(row["plan_id"], row["payload"]) if row is not None else None
+
+    def _find_by_health_secret(
+        self, field: str, secret_hash: str
+    ) -> tuple[str, PlanRecord] | None:
+        with closing(self._connect()) as connection, connection:
+            self._cleanup_expired(connection)
+            rows = connection.execute(
+                "SELECT plan_id, owner_id, payload FROM plans ORDER BY updated_at DESC"
+            ).fetchall()
+        for row in rows:
+            record = self._decode(row["plan_id"], row["payload"])
+            if field == "pairing":
+                pairing = record.health_pairing
+                if (
+                    pairing
+                    and pairing.code_hash == secret_hash
+                    and pairing.expires_at > datetime.now(UTC)
+                ):
+                    return row["owner_id"], record
+            else:
+                connection = record.health_connection
+                if connection and connection.token_hash == secret_hash:
+                    return row["owner_id"], record
+        return None
+
+    def find_by_health_pairing(self, code_hash: str) -> tuple[str, PlanRecord] | None:
+        return self._find_by_health_secret("pairing", code_hash)
+
+    def find_by_health_token(self, token_hash: str) -> tuple[str, PlanRecord] | None:
+        return self._find_by_health_secret("token", token_hash)
 
     def delete(self, plan_id: str, owner_id: str) -> bool:
         with closing(self._connect()) as connection, connection:

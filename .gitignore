@@ -7,3 +7,9 @@ __pycache__/
 data/
 .pytest_cache/
 .DS_Store
+android-companion/.gradle/
+android-companion/**/build/
+android-companion/local.properties
+.vercel/
+.vercel
+.env*

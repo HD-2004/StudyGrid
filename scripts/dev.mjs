@@ -43,7 +43,7 @@ const frontendPort = validPort(
 )
 const frontendHost = optionValue('--host', process.env.STUDYGRID_WEB_HOST ?? '127.0.0.1')
 const apiPort = validPort(
-  optionValue('--api-port', process.env.STUDYGRID_API_PORT ?? '8000'),
+  optionValue('--api-port', process.env.STUDYGRID_API_PORT ?? '8001'),
   'API port',
 )
 const apiHost = optionValue('--api-host', process.env.STUDYGRID_API_HOST ?? '127.0.0.1')
@@ -61,6 +61,7 @@ if (!rawArgs.includes('--strictPort')) frontendArgs.push('--strictPort')
 
 const displayHost = frontendHost === '0.0.0.0' || frontendHost === '::' ? 'localhost' : frontendHost
 const frontendTarget = `http://${displayHost}:${frontendPort}`
+const expectedApiVersion = '2026-09-health-1'
 
 const python = process.platform === 'win32'
   ? join(root, '.venv', 'Scripts', 'python.exe')
@@ -96,15 +97,22 @@ function stop(exitCode = 0) {
   setTimeout(() => process.exit(exitCode), 350)
 }
 
-async function apiIsReady() {
+async function inspectApi() {
   try {
     const response = await fetch(`${apiTarget}/health`, {
       signal: AbortSignal.timeout(750),
     })
-    return response.ok && (await response.json()).status === 'ok'
+    if (!response.ok) return 'other'
+    const body = await response.json()
+    if (body.status !== 'ok') return 'other'
+    return body.api_version === expectedApiVersion ? 'current' : 'stale'
   } catch {
-    return false
+    return 'offline'
   }
+}
+
+async function apiIsReady() {
+  return (await inspectApi()) === 'current'
 }
 
 async function waitForApi() {
@@ -138,7 +146,9 @@ async function inspectFrontend() {
     const apiResponse = await fetch(`${frontendTarget}/api/privacy`, {
       signal: AbortSignal.timeout(1_500),
     })
-    return apiResponse.ok ? 'studygrid' : 'studygrid-without-api'
+    if (!apiResponse.ok) return 'studygrid-without-api'
+    const privacy = await apiResponse.json()
+    return privacy.api_version === expectedApiVersion ? 'studygrid' : 'studygrid-without-api'
   } catch {
     return 'studygrid-without-api'
   }
@@ -148,8 +158,15 @@ process.on('SIGINT', () => stop(0))
 process.on('SIGTERM', () => stop(0))
 
 try {
-  if (await apiIsReady()) {
+  const apiState = await inspectApi()
+  if (apiState === 'current') {
     console.log(`[StudyGrid] Reusing API at ${apiTarget}`)
+  } else if (apiState !== 'offline') {
+    throw new Error(
+      `Port ${apiPort} is serving ${
+        apiState === 'stale' ? 'an older StudyGrid API' : 'another application'
+      }. Stop that process, then run this command again.`,
+    )
   } else {
     console.log(`[StudyGrid] Starting API at ${apiTarget}`)
     apiProcess = spawn(

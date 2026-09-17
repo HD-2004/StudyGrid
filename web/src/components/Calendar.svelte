@@ -1,15 +1,16 @@
 <script lang="ts">
-  import type { CalendarEvent } from '../lib/types'
+  import { createI18n } from '../lib/i18n'
+  import {
+    deriveScheduleViewModel,
+    visibleSubjectsFor,
+    type ScheduleItem,
+  } from '../lib/schedule-state'
+  import type { CalendarEvent, ReadinessAssessment, ReadinessStatus } from '../lib/types'
 
   type Theme = 'light' | 'dark'
   type CalendarView = 'week' | 'month'
-  type AiPreview = {
-    eventId: string
-    title: string
-    currentStart: string
-    proposedStart: string
-    proposedEnd: string
-    explanation: string
+  type CoachResponse = {
+    reply: string
     source: 'ai' | 'fallback'
   }
   type Interaction = {
@@ -27,6 +28,7 @@
   let {
     events,
     unscheduled,
+    readiness,
     theme,
     onSelect,
     onMove,
@@ -41,6 +43,7 @@
   }: {
     events: CalendarEvent[]
     unscheduled: string[]
+    readiness: ReadinessAssessment | null
     theme: Theme
     onSelect: (id: string) => void
     onMove: (id: string, start: string, end: string) => Promise<void>
@@ -59,6 +62,9 @@
   const ROW_HEIGHT = 56
   const HOURS = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, index) => START_HOUR + index)
   const EVENT_COLORS = ['blue', 'amber', 'teal', 'coral', 'violet', 'rose']
+  const calendarI18n = createI18n('vi')
+  const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  const timezoneLabel = calendarI18n.timezone()
 
   let anchor = $state(new Date())
   let anchorInitialized = false
@@ -68,7 +74,7 @@
   let aiPrompt = $state('Tối ưu lịch tuần này để tôi hoàn thành các việc quan trọng.')
   let aiBusy = $state(false)
   let aiError = $state<string | null>(null)
-  let aiPreview = $state<AiPreview | null>(null)
+  let coachResponse = $state<CoachResponse | null>(null)
   let hiddenSubjects = $state<string[]>([])
   let interaction = $state<Interaction | null>(null)
   let savingMove = $state(false)
@@ -82,8 +88,18 @@
   const subjects = $derived(
     [...new Set(events.map((event) => event.subject))].sort((a, b) => a.localeCompare(b)),
   )
-  const visibleEvents = $derived(
-    events.filter((event) => !hiddenSubjects.includes(event.subject)),
+  const visibleSubjects = $derived(visibleSubjectsFor(events, hiddenSubjects))
+  const scheduleViewModel = $derived(
+    deriveScheduleViewModel({
+      events,
+      visibleSubjects,
+      locale: 'vi',
+      timezone: browserTimezone,
+      anchorDate: dateKey(anchor),
+      view,
+      unscheduled,
+      readiness,
+    }),
   )
   const calendarTitle = $derived(
     view === 'week'
@@ -154,6 +170,15 @@
     }).format(value)
   }
 
+  function readinessLabel(status: ReadinessStatus): string {
+    return {
+      insufficient_data: 'Chưa đủ dữ liệu',
+      ready: 'Sẵn sàng',
+      reduce_load: 'Giảm tải',
+      recovery: 'Phục hồi',
+    }[status]
+  }
+
   function eventColor(event: CalendarEvent): string {
     let hash = 0
     for (const character of event.subject) hash = (hash * 31 + character.charCodeAt(0)) | 0
@@ -168,9 +193,14 @@
   }
 
   function eventsForDay(day: Date): CalendarEvent[] {
-    return visibleEvents
-      .filter((event) => isSameDay(displayTimes(event).start, day))
-      .sort((left, right) => displayTimes(left).start.getTime() - displayTimes(right).start.getTime())
+    const projected = scheduleViewModel.eventsByDate.get(dateKey(day)) ?? []
+    return projected
+      .map((item: ScheduleItem) => item.event)
+      .sort((left, right) => {
+        const leftStart = displayTimes(left).start.getTime()
+        const rightStart = displayTimes(right).start.getTime()
+        return leftStart - rightStart || left.id.localeCompare(right.id)
+      })
   }
 
   function eventStyle(event: CalendarEvent): string {
@@ -279,68 +309,21 @@
     }
   }
 
-  function findSuggestedMove(): { event: CalendarEvent; start: Date; end: Date } | null {
-    const candidate = [...events]
-      .filter((event) => event.completion === 'planned')
-      .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))[0]
-    if (!candidate) return null
-    const currentStart = new Date(candidate.start)
-    const duration = Date.parse(candidate.end) - currentStart.getTime()
-    for (let offset = 1; offset <= 14; offset += 1) {
-      const start = addDays(currentStart, offset)
-      const end = new Date(start.getTime() + duration)
-      const overlaps = events.some((event) => {
-        if (event.id === candidate.id) return false
-        const otherStart = new Date(event.start)
-        const otherEnd = new Date(event.end)
-        return start < otherEnd && end > otherStart
-      })
-      if (!overlaps) return { event: candidate, start, end }
-    }
-    return null
-  }
-
-  async function requestAiPreview() {
+  async function requestCoachResponse() {
     if (!aiPrompt.trim() || aiBusy) return
     aiBusy = true
     aiError = null
-    aiPreview = null
+    coachResponse = null
     try {
-      const [answer, move] = await Promise.all([
-        onAskAi(aiPrompt.trim()),
-        Promise.resolve(findSuggestedMove()),
-      ])
-      if (!move) {
-        aiError = 'Hiện chưa có công việc Pending hoặc khung giờ trống phù hợp để đề xuất.'
-        return
-      }
-      aiPreview = {
-        eventId: move.event.id,
-        title: move.event.title,
-        currentStart: move.event.start,
-        proposedStart: toLocalIso(move.start),
-        proposedEnd: toLocalIso(move.end),
-        explanation: answer.reply,
+      const answer = await onAskAi(aiPrompt.trim())
+      coachResponse = {
+        reply: answer.reply,
         source: answer.source,
       }
     } catch (reason) {
-      aiError = reason instanceof Error ? reason.message : 'Không thể tạo đề xuất lúc này.'
+      aiError = reason instanceof Error ? reason.message : 'Không thể nhận tư vấn lúc này.'
     } finally {
       aiBusy = false
-    }
-  }
-
-  async function applyAiPreview() {
-    if (!aiPreview || savingMove) return
-    savingMove = true
-    try {
-      await onMove(aiPreview.eventId, aiPreview.proposedStart, aiPreview.proposedEnd)
-      anchor = new Date(aiPreview.proposedStart)
-      aiPreview = null
-    } catch (reason) {
-      aiError = reason instanceof Error ? reason.message : 'Không thể áp dụng đề xuất.'
-    } finally {
-      savingMove = false
     }
   }
 </script>
@@ -426,6 +409,14 @@
         </section>
       {/if}
 
+      {#if readiness}
+        <button class={`calendar-readiness ${readiness.status}`} type="button" onclick={onOpenProgress} aria-label={`Mức sẵn sàng hôm nay: ${readinessLabel(readiness.status)}. Mở Tiến độ để xem chi tiết.`}>
+          <i aria-hidden="true"></i>
+          <span><small>Sức khỏe hôm nay</small><strong>{readinessLabel(readiness.status)}</strong></span>
+          <b>{readiness.capacity_percent}%</b>
+        </button>
+      {/if}
+
       <button class="progress-link" type="button" onclick={onOpenProgress}><span aria-hidden="true">▥</span>Tiến độ</button>
 
       <div class="status-legend" aria-label="Trạng thái sự kiện">
@@ -445,7 +436,7 @@
     <main class="calendar-main">
       {#if view === 'week'}
         <div class="week-head">
-          <div class="timezone">GMT+07</div>
+          <div class="timezone">{timezoneLabel}</div>
           {#each weekDays as day (dateKey(day))}
             <button type="button" class:today={isToday(day)} onclick={() => (anchor = new Date(day))}>
               <span>{formatWeekday(day)}</span><strong>{day.getDate()}</strong>
@@ -510,31 +501,24 @@
 
     <aside class="utility-area" aria-label="Công cụ StudyGrid">
       <nav class="utility-rail" aria-label="Công cụ nhanh">
-        <button type="button" class:active={aiOpen} aria-label="Lập kế hoạch với AI" onclick={() => (aiOpen = !aiOpen)}><span aria-hidden="true">✦</span><small>AI</small></button>
+        <button type="button" class:active={aiOpen} aria-label="Mở Study Coach" onclick={() => (aiOpen = !aiOpen)}><span aria-hidden="true">✦</span><small>Coach</small></button>
         <button type="button" aria-label="Mở tiến độ" onclick={onOpenProgress}><span aria-hidden="true">▥</span><small>Tiến độ</small></button>
       </nav>
       {#if aiOpen}
         <section class="ai-panel" aria-labelledby="ai-title">
-          <header><div><span aria-hidden="true">✦</span><h2 id="ai-title">Lập kế hoạch với AI</h2></div><button type="button" aria-label="Đóng AI" onclick={() => (aiOpen = false)}>×</button></header>
-          <p>AI phân tích lịch đang có; mọi thay đổi đều cần bạn xác nhận.</p>
-          <label for="ai-prompt">Bạn muốn điều chỉnh điều gì?</label>
+          <header><div><span aria-hidden="true">✦</span><h2 id="ai-title">Study Coach</h2></div><button type="button" aria-label="Đóng Study Coach" onclick={() => (aiOpen = false)}>×</button></header>
+          <p>Coach có thể giải thích kế hoạch và gợi ý bước tiếp theo, nhưng không thay đổi lịch.</p>
+          <label for="ai-prompt">Bạn muốn hỏi điều gì về kế hoạch?</label>
           <textarea id="ai-prompt" rows="4" maxlength="1000" bind:value={aiPrompt}></textarea>
-          <button class="ai-submit" type="button" disabled={aiBusy || !aiPrompt.trim()} onclick={requestAiPreview}>{aiBusy ? 'Đang phân tích…' : 'Tạo đề xuất'}</button>
+          <button class="ai-submit" type="button" disabled={aiBusy || !aiPrompt.trim()} onclick={requestCoachResponse}>{aiBusy ? 'Đang trả lời…' : 'Hỏi Coach'}</button>
           {#if aiError}<div class="ai-error" role="alert">{aiError}</div>{/if}
-          {#if aiPreview}
-            <article class="ai-preview">
-              <div class="preview-label"><span>Đề xuất</span><small>{aiPreview.source === 'ai' ? 'OpenAI' : 'Scheduler dự phòng'}</small></div>
-              <h3>{aiPreview.title}</h3>
-              <div class="time-comparison">
-                <div><span>Hiện tại</span><strong>{new Date(aiPreview.currentStart).toLocaleString('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</strong></div>
-                <i aria-hidden="true">→</i>
-                <div><span>Đề xuất</span><strong>{new Date(aiPreview.proposedStart).toLocaleString('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</strong></div>
-              </div>
-              <p>{aiPreview.explanation}</p>
-              <div class="preview-actions"><button type="button" class="apply" disabled={savingMove} onclick={applyAiPreview}>Áp dụng</button><button type="button" onclick={() => (aiPreview = null)}>Bỏ qua</button></div>
+          {#if coachResponse}
+            <article class="coach-response" aria-live="polite">
+              <div class="response-label"><span>Phản hồi của Coach</span><small>{coachResponse.source === 'ai' ? 'AI' : 'Dự phòng xác định'}</small></div>
+              <p>{coachResponse.reply}</p>
             </article>
           {:else}
-            <div class="ai-empty"><span aria-hidden="true">✦</span><p>Nhập mục tiêu để nhận một phương án thay đổi có thể xem trước.</p></div>
+            <div class="ai-empty"><span aria-hidden="true">✦</span><p>Hỏi về kế hoạch, khối lượng còn lại hoặc cách phục hồi sau một buổi học bị lỡ.</p></div>
           {/if}
         </section>
       {/if}
@@ -545,7 +529,7 @@
 <style>
   .calendar-app { height: 100dvh; min-height: 680px; overflow: hidden; background: var(--page); color: var(--ink); }
   .calendar-toolbar { height: 64px; display: grid; grid-template-columns: 240px minmax(430px, 1fr) auto; align-items: center; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--rule); background: var(--surface); }
-  .toolbar-brand, .date-navigation, .toolbar-actions, .calendar-brand, .mini-calendar header, .calendar-list header, .backlog-list header, .ai-panel header, .ai-panel header > div, .preview-actions { display: flex; align-items: center; }
+  .toolbar-brand, .date-navigation, .toolbar-actions, .calendar-brand, .mini-calendar header, .calendar-list header, .backlog-list header, .ai-panel header, .ai-panel header > div { display: flex; align-items: center; }
   .toolbar-brand { gap: 12px; }
   .calendar-brand { gap: 10px; color: var(--ink); text-decoration: none; font-size: 18px; }
   .grid-mark { width: 28px; height: 28px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; }
@@ -597,6 +581,17 @@
   .subject-color { width: 7px; height: 7px; border-radius: 50%; }
   .progress-link { width: 100%; min-height: 42px; display: flex; align-items: center; gap: 12px; margin-top: 22px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font-weight: 650; text-align: left; }
   .progress-link:hover { background: var(--surface-subtle); }
+  .calendar-readiness { width: 100%; min-height: 54px; display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 9px; margin-top: 20px; padding: 9px 10px; border: 1px solid var(--rule); border-radius: 9px; background: var(--surface-subtle); color: var(--ink); text-align: left; }
+  .calendar-readiness:hover { border-color: var(--rule-strong); background: var(--surface-elevated); }
+  .calendar-readiness > i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); }
+  .calendar-readiness.ready > i { background: var(--success); }
+  .calendar-readiness.reduce_load > i { background: var(--activity-unexpected); }
+  .calendar-readiness.recovery > i { background: var(--danger); }
+  .calendar-readiness span { display: flex; min-width: 0; flex-direction: column; }
+  .calendar-readiness small { color: var(--ink-faint); font-size: 8px; }
+  .calendar-readiness strong { overflow: hidden; margin-top: 1px; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .calendar-readiness b { color: var(--ink-soft); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .calendar-readiness + .progress-link { margin-top: 6px; }
   .status-legend { margin-top: 30px; display: grid; gap: 7px; color: var(--ink-soft); font-size: 10px; }
   .status-legend p { margin: 0 0 3px; color: var(--ink-faint); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
   .status-legend span { display: flex; align-items: center; gap: 8px; }
@@ -672,18 +667,10 @@
   .ai-panel textarea { width: 100%; resize: vertical; padding: 10px; border: 1px solid var(--rule-strong); border-radius: 7px; background: var(--surface-elevated); color: var(--ink); font: inherit; font-size: 12px; line-height: 1.45; }
   .ai-submit { width: 100%; min-height: 40px; margin-top: 9px; border: 0; border-radius: 7px; background: var(--accent); color: var(--accent-ink); font-weight: 750; }
   .ai-error { margin-top: 12px; padding: 9px; border: 1px solid var(--danger); border-radius: 7px; color: var(--danger-ink); font-size: 11px; }
-  .ai-preview { margin-top: 16px; padding: 13px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--rule)); border-radius: 9px; background: color-mix(in srgb, var(--accent) 6%, var(--surface-elevated)); }
-  .preview-label { display: flex; justify-content: space-between; color: var(--accent-strong); font-size: 10px; font-weight: 750; text-transform: uppercase; }
-  .preview-label small { color: var(--ink-faint); font-size: 8px; }
-  .ai-preview h3 { margin: 8px 0 10px; font-size: 13px; }
-  .time-comparison { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 7px; }
-  .time-comparison div { padding: 7px; border: 1px solid var(--rule); border-radius: 6px; }
-  .time-comparison span { display: block; color: var(--ink-faint); font-size: 8px; }
-  .time-comparison strong { display: block; margin-top: 2px; font-size: 9px; line-height: 1.35; }
-  .ai-preview > p { max-height: 98px; overflow: auto; margin: 11px 0; color: var(--ink-soft); font-size: 10px; line-height: 1.45; }
-  .preview-actions { gap: 7px; }
-  .preview-actions button { flex: 1; min-height: 36px; border: 1px solid var(--rule-strong); border-radius: 6px; background: transparent; color: var(--ink); }
-  .preview-actions button.apply { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+  .coach-response { margin-top: 16px; padding: 13px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--rule)); border-radius: 9px; background: color-mix(in srgb, var(--accent) 6%, var(--surface-elevated)); }
+  .response-label { display: flex; justify-content: space-between; gap: 8px; color: var(--accent-strong); font-size: 10px; font-weight: 750; }
+  .response-label small { color: var(--ink-faint); font-size: 9px; font-weight: 650; }
+  .coach-response > p { max-height: 180px; overflow: auto; margin: 11px 0 0; color: var(--ink-soft); font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
   .ai-empty { min-height: 180px; display: grid; place-content: center; justify-items: center; color: var(--ink-faint); text-align: center; }
   .ai-empty span { color: var(--accent); font-size: 24px; }
   .ai-empty p { max-width: 220px; font-size: 11px; line-height: 1.5; }

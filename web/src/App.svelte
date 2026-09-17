@@ -7,6 +7,7 @@
     deletePlan,
     deleteSessionData,
     getEvents,
+    getHealthDashboard,
     getLatestPlan,
     getMissReasons,
     getPrivacy,
@@ -23,6 +24,7 @@
     PlanChange,
     PlanRequest,
     PlanResponse,
+    HealthDashboard,
     PrivacyResponse,
     ReasonOption,
     Recall,
@@ -55,6 +57,7 @@
   let theme = $state<Theme>('dark')
   let themeReady = $state(false)
   let privacy = $state<PrivacyResponse | null>(null)
+  let healthDashboard = $state<HealthDashboard | null>(null)
   let rescheduleFlow = $state<RescheduleProposal | null>(null)
   let plannerDialog = $state<HTMLDialogElement | null>(null)
   let setupTrigger = $state<HTMLElement | null>(null)
@@ -141,9 +144,13 @@
     selectedId = null
     try {
       const created = await createPlan(request)
-      const createdEvents = await getEvents(created.plan_id)
+      const [createdEvents, createdHealth] = await Promise.all([
+        getEvents(created.plan_id),
+        getHealthDashboard(created.plan_id),
+      ])
       plan = created
       events = createdEvents
+      healthDashboard = createdHealth
       progressOpen = false
       await closeSetup()
       document.querySelector<HTMLElement>('.calendar-panel')?.focus()
@@ -158,9 +165,13 @@
     try {
       const latest = await getLatestPlan()
       if (!latest) return
-      const restoredEvents = await getEvents(latest.plan_id)
+      const [restoredEvents, restoredHealth] = await Promise.all([
+        getEvents(latest.plan_id),
+        getHealthDashboard(latest.plan_id),
+      ])
       plan = latest
       events = restoredEvents
+      healthDashboard = restoredHealth
     } catch (reason) {
       error = reason instanceof ApiError ? reason.message : 'Could not restore your saved plan.'
     } finally {
@@ -200,6 +211,18 @@
     } finally {
       updating = false
     }
+  }
+
+  async function refreshAfterHealthChange() {
+    if (!plan) return
+    const [latest, refreshedEvents, refreshedHealth] = await Promise.all([
+      getLatestPlan(),
+      getEvents(plan.plan_id),
+      getHealthDashboard(plan.plan_id),
+    ])
+    if (latest?.plan_id === plan.plan_id) plan = latest
+    events = refreshedEvents
+    healthDashboard = refreshedHealth
   }
 
   async function applyReschedule(action: RescheduleAction) {
@@ -249,6 +272,7 @@
       await deletePlan(plan.plan_id)
       plan = null
       events = []
+      healthDashboard = null
       changes = []
       selectedId = null
       progressOpen = false
@@ -272,6 +296,7 @@
       await deleteSessionData()
       plan = null
       events = []
+      healthDashboard = null
       changes = []
       selectedId = null
       progressOpen = false
@@ -398,11 +423,12 @@
         <div class="calendar-error" role="alert"><span>{error}</span><button type="button" onclick={() => (error = null)}>×</button></div>
       {/if}
       {#if progressOpen}
-        <div class="progress-shell"><ProgressDashboard onClose={() => (progressOpen = false)} /></div>
+        <div class="progress-shell"><ProgressDashboard planId={plan.plan_id} onClose={() => (progressOpen = false)} onScheduleChanged={refreshAfterHealthChange} /></div>
       {:else}
         <Calendar
           {events}
           unscheduled={plan.unscheduled}
+          readiness={healthDashboard?.readiness ?? null}
           {theme}
           onSelect={(id) => (selectedId = id)}
           onMove={moveSession}

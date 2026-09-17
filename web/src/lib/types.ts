@@ -118,6 +118,7 @@ export interface PlanResponse {
 
 export interface PrivacyResponse {
   anonymous_session: boolean
+  api_version: string
   durable_storage: boolean
   retention_days: number
 }
@@ -275,4 +276,102 @@ export interface CoachResponse {
   history: ChatMessage[]
   source: 'ai' | 'fallback'
   suggestions: string[]
+}
+
+export type HealthConnectionStatus = 'connected' | 'paused'
+export type ReadinessStatus = 'insufficient_data' | 'ready' | 'reduce_load' | 'recovery'
+
+export interface DailyHealthSummary {
+  occurred_on: string
+  sleep_minutes: number | null
+  sleep_start: string | null
+  sleep_end: string | null
+  resting_heart_rate_bpm: number | null
+  hrv_rmssd_ms: number | null
+  energy_level: number | null
+  feels_unwell: boolean | null
+  source_devices: string[]
+  synced_at: string
+}
+
+export interface ReadinessFactor {
+  key: string
+  label: string
+  impact: 'positive' | 'neutral' | 'negative'
+  detail: string
+}
+
+export interface ReadinessAssessment {
+  occurred_on: string
+  status: ReadinessStatus
+  capacity_percent: number
+  confidence: 'low' | 'medium' | 'high'
+  factors: ReadinessFactor[]
+  baseline_days: number
+  sleep_baseline_minutes: number | null
+  resting_hr_baseline_bpm: number | null
+  hrv_baseline_rmssd_ms: number | null
+  disclaimer: string
+}
+
+export interface HealthConnection {
+  provider: 'health_connect'
+  status: HealthConnectionStatus
+  paired_at: string
+  last_synced_at: string | null
+  permissions: string[]
+  sources: string[]
+}
+
+export interface HealthScheduleRecommendation {
+  id: string
+  kind: 'protect' | 'shorten_move' | 'recovery_break' | 'no_change'
+  title: string
+  detail: string
+  session_id: string | null
+  protected: boolean
+  keep_minutes: number
+  defer_minutes: number
+}
+
+export interface HealthPolicy {
+  baseline_days: number
+  minimum_baseline_days: number
+  ready_capacity_percent: number
+  reduce_capacity_percent: number
+  recovery_capacity_percent: number
+  retention_days: number
+}
+
+export interface HealthAdjustmentLog {
+  id: string
+  occurred_on: string
+  readiness_status: ReadinessStatus
+  changes: PlanChange[]
+  applied_at: string
+}
+
+export interface HealthDashboard {
+  plan_id: string
+  connection: HealthConnection | null
+  summaries: DailyHealthSummary[]
+  readiness: ReadinessAssessment
+  recommendations: HealthScheduleRecommendation[]
+  adjustments: HealthAdjustmentLog[]
+  policy: HealthPolicy
+}
+
+export interface HealthPairingResponse {
+  plan_id: string
+  provider: 'health_connect'
+  code: string
+  expires_at: string
+}
+
+export interface HealthScheduleApplyResponse {
+  sessions: StudySession[]
+  changes: PlanChange[]
+  unscheduled: string[]
+  readiness: ReadinessAssessment
+  recommendations: HealthScheduleRecommendation[]
 }

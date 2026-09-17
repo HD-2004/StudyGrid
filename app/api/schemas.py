@@ -18,10 +18,15 @@ from ..models import (
     ActivityLog,
     ChatMessage,
     Completion,
+    DailyHealthSummary,
+    HealthAdjustmentLog,
+    HealthConnectionStatus,
+    HealthScheduleRecommendation,
     Insights,
     MissReason,
     PlanChange,
     Recall,
+    ReadinessAssessment,
     StudySession,
     Topic,
 )
@@ -39,6 +44,7 @@ class PrivacyResponse(BaseModel):
     """Public retention facts for the user-test interface."""
 
     anonymous_session: bool = True
+    api_version: str = "2026-09-health-1"
     durable_storage: bool
     retention_days: int
 
@@ -277,3 +283,88 @@ class CoachResponse(BaseModel):
     history: list[ChatMessage]
     source: Literal["ai", "fallback"]
     suggestions: list[str]
+
+
+class HealthPairingRequest(BaseModel):
+    plan_id: str = Field(min_length=1, max_length=100)
+
+
+class HealthPairingResponse(BaseModel):
+    plan_id: str
+    provider: Literal["health_connect"] = "health_connect"
+    code: str
+    expires_at: datetime
+
+
+class HealthPairingClaimRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    code: str = Field(min_length=8, max_length=12)
+
+
+class HealthPairingClaimResponse(BaseModel):
+    plan_id: str
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+
+
+class HealthSyncRequest(BaseModel):
+    summaries: list[DailyHealthSummary] = Field(min_length=1, max_length=31)
+    permissions: list[str] = Field(default_factory=list, max_length=12)
+    sources: list[str] = Field(default_factory=list, max_length=12)
+
+
+class HealthSyncResponse(BaseModel):
+    accepted_days: int
+    last_synced_at: datetime
+
+
+class HealthConnectionView(BaseModel):
+    provider: Literal["health_connect"] = "health_connect"
+    status: HealthConnectionStatus
+    paired_at: datetime
+    last_synced_at: datetime | None = None
+    permissions: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+
+
+class HealthPolicyResponse(BaseModel):
+    baseline_days: int
+    minimum_baseline_days: int
+    ready_capacity_percent: int
+    reduce_capacity_percent: int
+    recovery_capacity_percent: int
+    retention_days: int
+
+
+class HealthDashboardResponse(BaseModel):
+    plan_id: str
+    connection: HealthConnectionView | None = None
+    summaries: list[DailyHealthSummary] = Field(default_factory=list)
+    readiness: ReadinessAssessment
+    recommendations: list[HealthScheduleRecommendation] = Field(default_factory=list)
+    adjustments: list[HealthAdjustmentLog] = Field(default_factory=list)
+    policy: HealthPolicyResponse
+
+
+class HealthCheckInRequest(BaseModel):
+    plan_id: str = Field(min_length=1, max_length=100)
+    occurred_on: date
+    energy_level: int = Field(ge=1, le=5)
+    feels_unwell: bool = False
+
+
+class HealthPlanRequest(BaseModel):
+    plan_id: str = Field(min_length=1, max_length=100)
+
+
+class HealthScheduleApplyRequest(HealthPlanRequest):
+    occurred_on: date
+
+
+class HealthScheduleApplyResponse(BaseModel):
+    sessions: list[StudySession]
+    changes: list[PlanChange] = Field(default_factory=list)
+    unscheduled: list[str] = Field(default_factory=list)
+    readiness: ReadinessAssessment
+    recommendations: list[HealthScheduleRecommendation] = Field(default_factory=list)
